@@ -1,0 +1,45 @@
+/* Task Manager Linux - Theme Overrides */
+
+.process-view {
+    font-size: 13px;
+}
+
+.process-view .header {
+    font-weight: bold;
+}
+
+.graph-area {
+    background-color: @window_bg_color;
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.perf-label-title {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.perf-label-value {
+    font-size: 14px;
+}
+
+.perf-sidebar row {
+    padding: 8px 12px;
+}
+
+.status-bar {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.search-bar {
+    margin: 4px 8px;
+}
+
+columnview > listview > row > cell {
+    padding: 2px 8px;
+}
+
+columnview > listview > row:selected {
+    background-color: alpha(@accent_color, 0.3);
+}

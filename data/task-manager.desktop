@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+GenericName=System Monitor
+Comment=System process manager and performance monitor
+Exec=/home/user/.local/bin/task-manager-linux
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=task;process;system;monitor;cpu;memory;gpu;
+StartupNotify=true
+X-KDE-SubstituteUID=false
+X-KDE-Shortcuts=Ctrl+Shift+Esc
