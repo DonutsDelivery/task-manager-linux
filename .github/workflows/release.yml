@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist/task-manager-linux
+          cp target/release/task-manager-linux dist/task-manager-linux/
+          cp data/task-manager.desktop dist/task-manager-linux/
+          cp scripts/setup-shortcut.sh dist/task-manager-linux/
+          cp README.md dist/task-manager-linux/
+          cd dist && tar czf ../task-manager-linux-x86_64.tar.gz task-manager-linux
+
+      - name: Package standalone binary
+        run: cp target/release/task-manager-linux task-manager-linux-x86_64
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            task-manager-linux-x86_64.tar.gz
+            task-manager-linux-x86_64

@@ -2,7 +2,31 @@
 
 A lightweight, native system task manager for Linux built with **GTK4** and **Rust**.
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/ZhvPhXrdZ4)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/donutsdelivery)
+
 ![Task Manager mockup](data/mockup.svg)
+
+## Download
+
+| Platform | Download |
+|----------|----------|
+| **Linux (x86_64)** | [Tarball (.tar.gz)](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64.tar.gz) &#124; [Binary](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64) |
+
+### Quick Install
+
+```bash
+# Download and extract
+curl -LO https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64.tar.gz
+tar xzf task-manager-linux-x86_64.tar.gz
+cd task-manager-linux
+
+# Run
+./task-manager-linux
+```
+
+> **Runtime dependencies:** GTK4 and libadwaita must be installed on your system.
+> Most modern Linux desktops (GNOME, KDE Plasma 6) include these by default.
 
 ## Features
 
@@ -14,13 +38,16 @@ A lightweight, native system task manager for Linux built with **GTK4** and **Ru
 - **Critical Process Protection** — Warning dialogs prevent accidentally killing system-critical processes like systemd or kwin
 - **Global Shortcut** — Register Ctrl+Shift+Esc from inside the app (KDE Plasma)
 
-## Building
+## Building from Source
 
 Requires Rust and GTK4/libadwaita development libraries.
 
 ```bash
 # Arch Linux
 sudo pacman -S gtk4 libadwaita
+
+# Ubuntu/Debian
+sudo apt install libgtk-4-dev libadwaita-1-dev
 
 # Build
 cargo build --release
