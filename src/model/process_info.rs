@@ -22,6 +22,7 @@ pub struct ProcessInfo {
     pub start_time: u64,
     pub uid: u32,
     pub user: String,
+    pub container_type: String,
     // Internal tracking for CPU delta calculation
     pub total_cpu_time: u64,
     pub prev_cpu_time: u64,
@@ -52,6 +53,7 @@ impl Default for ProcessInfo {
             start_time: 0,
             uid: 0,
             user: String::new(),
+            container_type: String::new(),
             total_cpu_time: 0,
             prev_cpu_time: 0,
             prev_disk_read: 0,

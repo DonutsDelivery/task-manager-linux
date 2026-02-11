@@ -19,7 +19,7 @@ impl CpuCollector {
         }
     }
 
-    pub fn collect(&mut self) -> (f64, Vec<f64>, f64) {
+    pub fn collect(&mut self) -> (f64, Vec<f64>, f64, f64) {
         let stat = fs::read_to_string("/proc/stat").unwrap_or_default();
         let mut total_percent = 0.0;
         let mut per_core = Vec::new();
@@ -84,7 +84,9 @@ impl CpuCollector {
             freq = f.trim().parse::<f64>().unwrap_or(0.0) / 1000.0; // kHz -> MHz
         }
 
-        (total_percent, per_core, freq)
+        let temperature = read_cpu_temperature();
+
+        (total_percent, per_core, freq, temperature)
     }
 }
 
@@ -104,6 +106,33 @@ fn cpu_model_name() -> String {
         .and_then(|l| l.split(':').nth(1))
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "Unknown CPU".to_string())
+}
+
+fn read_cpu_temperature() -> f64 {
+    // Try hwmon: look for coretemp (Intel) or k10temp (AMD)
+    if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = fs::read_to_string(path.join("name")).unwrap_or_default();
+            let name = name.trim();
+            if name == "coretemp" || name == "k10temp" {
+                if let Ok(temp_str) = fs::read_to_string(path.join("temp1_input")) {
+                    if let Ok(millideg) = temp_str.trim().parse::<f64>() {
+                        return millideg / 1000.0;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: thermal_zone0
+    if let Ok(temp_str) = fs::read_to_string("/sys/class/thermal/thermal_zone0/temp") {
+        if let Ok(millideg) = temp_str.trim().parse::<f64>() {
+            return millideg / 1000.0;
+        }
+    }
+
+    0.0
 }
 
 pub fn uptime_secs() -> u64 {

@@ -14,6 +14,9 @@ pub struct PerformanceTab {
     gpu_panel: GpuPanel,
     disk_panel: DiskPanel,
     network_panel: NetworkPanel,
+    battery_panel: BatteryPanel,
+    nav_list: gtk::ListBox,
+    battery_row_added: bool,
 }
 
 impl PerformanceTab {
@@ -27,13 +30,13 @@ impl PerformanceTab {
 
         let items = ["CPU", "Memory", "GPU", "Disk", "Network"];
         for name in &items {
-            let row = gtk::Label::new(Some(name));
-            row.set_halign(gtk::Align::Start);
-            row.set_margin_top(6);
-            row.set_margin_bottom(6);
-            row.set_margin_start(12);
-            row.set_margin_end(12);
-            nav_list.append(&row);
+            let label = gtk::Label::new(Some(name));
+            label.set_halign(gtk::Align::Start);
+            label.set_margin_top(6);
+            label.set_margin_bottom(6);
+            label.set_margin_start(12);
+            label.set_margin_end(12);
+            nav_list.append(&label);
         }
 
         let nav_scroll = gtk::ScrolledWindow::builder()
@@ -63,8 +66,11 @@ impl PerformanceTab {
         let network_panel = NetworkPanel::new();
         stack.add_named(&network_panel.widget, Some("network"));
 
+        let battery_panel = BatteryPanel::new();
+        stack.add_named(&battery_panel.widget, Some("battery"));
+
         let stack_ref = stack.clone();
-        let names = ["cpu", "memory", "gpu", "disk", "network"];
+        let names = ["cpu", "memory", "gpu", "disk", "network", "battery"];
         nav_list.connect_row_selected(move |_, row| {
             if let Some(row) = row {
                 let idx = row.index() as usize;
@@ -91,6 +97,9 @@ impl PerformanceTab {
             gpu_panel,
             disk_panel,
             network_panel,
+            battery_panel,
+            nav_list,
+            battery_row_added: false,
         }
     }
 
@@ -100,6 +109,19 @@ impl PerformanceTab {
         self.gpu_panel.update(&snapshot.gpu);
         self.disk_panel.update(&snapshot.disk);
         self.network_panel.update(&snapshot.network);
+        self.battery_panel.update(&snapshot.battery);
+
+        // Dynamically add Battery row to nav when battery is detected
+        if snapshot.battery.available && !self.battery_row_added {
+            let label = gtk::Label::new(Some("Battery"));
+            label.set_halign(gtk::Align::Start);
+            label.set_margin_top(6);
+            label.set_margin_bottom(6);
+            label.set_margin_start(12);
+            label.set_margin_end(12);
+            self.nav_list.append(&label);
+            self.battery_row_added = true;
+        }
     }
 }
 
@@ -111,6 +133,7 @@ struct CpuPanel {
     title_label: gtk::Label,
     utilization_label: gtk::Label,
     speed_label: gtk::Label,
+    temperature_label: gtk::Label,
     cores_label: gtk::Label,
     uptime_label: gtk::Label,
     initialized: bool,
@@ -138,13 +161,15 @@ impl CpuPanel {
 
         let utilization_label = gtk::Label::new(Some("0%"));
         let speed_label = gtk::Label::new(Some("0 GHz"));
+        let temperature_label = gtk::Label::new(Some("N/A"));
         let cores_label = gtk::Label::new(Some("0"));
         let uptime_label = gtk::Label::new(Some("0m"));
 
         add_info_row(&info_grid, 0, "Utilization", &utilization_label);
         add_info_row(&info_grid, 1, "Speed", &speed_label);
-        add_info_row(&info_grid, 2, "Cores", &cores_label);
-        add_info_row(&info_grid, 3, "Uptime", &uptime_label);
+        add_info_row(&info_grid, 2, "Temperature", &temperature_label);
+        add_info_row(&info_grid, 3, "Cores", &cores_label);
+        add_info_row(&info_grid, 4, "Uptime", &uptime_label);
 
         widget.append(&title_label);
         widget.append(&graph.widget);
@@ -156,6 +181,7 @@ impl CpuPanel {
             title_label,
             utilization_label,
             speed_label,
+            temperature_label,
             cores_label,
             uptime_label,
             initialized: false,
@@ -172,6 +198,7 @@ impl CpuPanel {
         self.graph.push_single(cpu.total_percent);
         self.utilization_label.set_text(&util::format_percent(cpu.total_percent));
         self.speed_label.set_text(&util::format_frequency(cpu.frequency_mhz));
+        self.temperature_label.set_text(&util::format_temperature(cpu.temperature_celsius));
         self.uptime_label.set_text(&util::format_duration(cpu.uptime_secs));
     }
 }
@@ -493,6 +520,105 @@ impl NetworkPanel {
 
         self.graph.push_values(&[total_rx, total_tx]);
         self.info_label.set_text(&info_parts.join("\n"));
+    }
+}
+
+// ── Battery Panel ─────────────────────────────────────────
+
+struct BatteryPanel {
+    widget: gtk::Box,
+    graph: GraphWidget,
+    charge_label: gtk::Label,
+    status_label: gtk::Label,
+    power_label: gtk::Label,
+    time_label: gtk::Label,
+    ac_label: gtk::Label,
+    no_battery_label: gtk::Label,
+    initialized: bool,
+}
+
+impl BatteryPanel {
+    fn new() -> Self {
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        widget.set_margin_top(16);
+        widget.set_margin_start(16);
+        widget.set_margin_end(16);
+        widget.set_margin_bottom(16);
+
+        let title = gtk::Label::new(Some("Battery"));
+        title.add_css_class("perf-label-title");
+        title.set_halign(gtk::Align::Start);
+
+        let no_battery_label = gtk::Label::new(Some("No battery detected"));
+        no_battery_label.set_halign(gtk::Align::Start);
+
+        let graph = GraphWidget::new(600, 200);
+        graph.set_series_count(1, vec![GraphColor::new(0.2, 0.8, 0.3)]);
+        graph.set_max_value(100.0);
+
+        let info_grid = gtk::Grid::new();
+        info_grid.set_row_spacing(6);
+        info_grid.set_column_spacing(24);
+
+        let charge_label = gtk::Label::new(Some("0%"));
+        let status_label = gtk::Label::new(Some("Unknown"));
+        let power_label = gtk::Label::new(Some("0 W"));
+        let time_label = gtk::Label::new(Some("N/A"));
+        let ac_label = gtk::Label::new(Some("Unknown"));
+
+        add_info_row(&info_grid, 0, "Charge", &charge_label);
+        add_info_row(&info_grid, 1, "Status", &status_label);
+        add_info_row(&info_grid, 2, "Power Draw", &power_label);
+        add_info_row(&info_grid, 3, "Time Remaining", &time_label);
+        add_info_row(&info_grid, 4, "AC Power", &ac_label);
+
+        widget.append(&title);
+        widget.append(&no_battery_label);
+        widget.append(&graph.widget);
+        widget.append(&info_grid);
+
+        // Initially hide graph and info
+        graph.widget.set_visible(false);
+        info_grid.set_visible(false);
+
+        Self {
+            widget,
+            graph,
+            charge_label,
+            status_label,
+            power_label,
+            time_label,
+            ac_label,
+            no_battery_label,
+            initialized: false,
+        }
+    }
+
+    fn update(&mut self, battery: &crate::model::BatteryInfo) {
+        if battery.available {
+            self.no_battery_label.set_visible(false);
+            self.graph.widget.set_visible(true);
+            // Make info_grid visible (parent of labels)
+            if let Some(parent) = self.charge_label.parent() {
+                parent.set_visible(true);
+            }
+
+            self.graph.push_single(battery.percent);
+            self.charge_label.set_text(&format!("{:.1}%", battery.percent));
+            self.status_label.set_text(&battery.status);
+            self.power_label.set_text(&format!("{:.1} W", battery.power_watts));
+
+            if battery.time_remaining_secs > 0 {
+                self.time_label.set_text(&util::format_duration(battery.time_remaining_secs));
+            } else {
+                self.time_label.set_text("N/A");
+            }
+
+            self.ac_label.set_text(if battery.ac_connected { "Connected" } else { "Disconnected" });
+        } else {
+            self.no_battery_label.set_visible(true);
+            self.graph.widget.set_visible(false);
+        }
     }
 }
 

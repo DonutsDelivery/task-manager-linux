@@ -32,6 +32,11 @@ mod imp {
         pub is_group: RefCell<bool>,
         pub child_count: RefCell<u32>,
         pub nice: RefCell<i32>,
+        pub container_type: RefCell<String>,
+        pub user: RefCell<String>,
+        pub uid: RefCell<u32>,
+        pub threads: RefCell<u64>,
+        pub command: RefCell<String>,
     }
 
     #[glib::object_subclass]
@@ -68,6 +73,11 @@ impl ProcessObject {
         *imp.is_group.borrow_mut() = !group.children.is_empty();
         *imp.child_count.borrow_mut() = group.children.len() as u32;
         *imp.nice.borrow_mut() = group.leader.nice;
+        *imp.container_type.borrow_mut() = group.leader.container_type.clone();
+        *imp.user.borrow_mut() = group.leader.user.clone();
+        *imp.uid.borrow_mut() = group.leader.uid;
+        *imp.threads.borrow_mut() = group.leader.threads;
+        *imp.command.borrow_mut() = group.leader.command.clone();
     }
 
     pub fn set_from_process(&self, proc: &crate::model::ProcessInfo) {
@@ -85,9 +95,15 @@ impl ProcessObject {
         *imp.is_group.borrow_mut() = false;
         *imp.child_count.borrow_mut() = 0;
         *imp.nice.borrow_mut() = proc.nice;
+        *imp.container_type.borrow_mut() = proc.container_type.clone();
+        *imp.user.borrow_mut() = proc.user.clone();
+        *imp.uid.borrow_mut() = proc.uid;
+        *imp.threads.borrow_mut() = proc.threads;
+        *imp.command.borrow_mut() = proc.command.clone();
     }
 
     pub fn pid(&self) -> i32 { *self.imp().pid.borrow() }
+    pub fn ppid(&self) -> i32 { *self.imp().ppid.borrow() }
     pub fn display_name(&self) -> String { self.imp().display_name.borrow().clone() }
     pub fn cpu_percent(&self) -> f64 { *self.imp().cpu_percent.borrow() }
     pub fn memory_bytes(&self) -> u64 { *self.imp().memory_bytes.borrow() }
@@ -99,6 +115,11 @@ impl ProcessObject {
     pub fn is_group(&self) -> bool { *self.imp().is_group.borrow() }
     pub fn child_count(&self) -> u32 { *self.imp().child_count.borrow() }
     pub fn nice(&self) -> i32 { *self.imp().nice.borrow() }
+    pub fn container_type(&self) -> String { self.imp().container_type.borrow().clone() }
+    pub fn user(&self) -> String { self.imp().user.borrow().clone() }
+    pub fn uid(&self) -> u32 { *self.imp().uid.borrow() }
+    pub fn threads(&self) -> u64 { *self.imp().threads.borrow() }
+    pub fn command(&self) -> String { self.imp().command.borrow().clone() }
 }
 
 pub struct ProcessTab {
@@ -408,6 +429,36 @@ impl ProcessTab {
         path_col.set_sorter(Some(&path_sorter));
         column_view.append_column(&path_col);
 
+        // Container column
+        let container_factory = gtk::SignalListItemFactory::new();
+        container_factory.connect_setup(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let label = gtk::Label::new(None);
+            label.set_halign(gtk::Align::Start);
+            item.set_child(Some(&label));
+        });
+        container_factory.connect_bind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let label = item.child().and_downcast::<gtk::Label>().unwrap();
+            let ct = obj.container_type();
+            if ct.is_empty() {
+                label.set_text("—");
+            } else {
+                label.set_text(&ct);
+            }
+        });
+        let container_col = gtk::ColumnViewColumn::new(Some("Container"), Some(container_factory));
+        container_col.set_fixed_width(90);
+        container_col.set_resizable(true);
+        let container_sorter = gtk::CustomSorter::new(|a, b| {
+            let pa = a.downcast_ref::<ProcessObject>().unwrap();
+            let pb = b.downcast_ref::<ProcessObject>().unwrap();
+            pa.container_type().cmp(&pb.container_type()).into()
+        });
+        container_col.set_sorter(Some(&container_sorter));
+        column_view.append_column(&container_col);
+
         // Enable sorting via the column view sorter
         let cv_sorter = column_view.sorter();
         if let Some(s) = cv_sorter {
@@ -527,6 +578,21 @@ impl ProcessTab {
             }
         });
         widget.add_controller(key_controller);
+
+        // Double-click to open process details
+        let dbl_gesture = gtk::GestureClick::new();
+        dbl_gesture.set_button(1);
+        let sel_for_dbl = selection.clone();
+        let cv_for_dbl = column_view.clone();
+        dbl_gesture.connect_released(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                if let Some(obj) = sel_for_dbl.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+                    show_process_details(&cv_for_dbl, &obj);
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        column_view.add_controller(dbl_gesture);
 
         Self {
             widget,
@@ -686,4 +752,254 @@ fn show_error_dialog(widget: &gtk::ColumnView, message: &str) {
     );
     dialog.connect_response(|d, _| d.close());
     dialog.present();
+}
+
+// ── Process Details Panel (Feature 6) ────────────────────
+
+fn show_process_details(widget: &gtk::ColumnView, obj: &ProcessObject) {
+    let window = widget.root()
+        .and_then(|r| r.downcast::<gtk::Window>().ok());
+
+    let pid = obj.pid();
+    let name = obj.display_name();
+
+    let dialog = gtk::Window::builder()
+        .title(&format!("{} (PID {}) — Details", name, pid))
+        .default_width(700)
+        .default_height(500)
+        .modal(true)
+        .build();
+
+    if let Some(win) = &window {
+        dialog.set_transient_for(Some(win));
+    }
+
+    let notebook = gtk::Notebook::new();
+
+    // General tab
+    notebook.append_page(&build_general_tab(obj), Some(&gtk::Label::new(Some("General"))));
+
+    // Environment tab
+    notebook.append_page(&build_environ_tab(pid), Some(&gtk::Label::new(Some("Environment"))));
+
+    // Open Files tab
+    notebook.append_page(&build_files_tab(pid), Some(&gtk::Label::new(Some("Open Files"))));
+
+    // Memory Maps tab
+    notebook.append_page(&build_maps_tab(pid), Some(&gtk::Label::new(Some("Memory Maps"))));
+
+    // Network tab
+    notebook.append_page(&build_network_tab(pid), Some(&gtk::Label::new(Some("Network"))));
+
+    // Cgroup tab
+    notebook.append_page(&build_cgroup_tab(pid), Some(&gtk::Label::new(Some("Cgroup"))));
+
+    dialog.set_child(Some(&notebook));
+    dialog.present();
+}
+
+fn build_general_tab(obj: &ProcessObject) -> gtk::ScrolledWindow {
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(6);
+    grid.set_column_spacing(16);
+    grid.set_margin_top(12);
+    grid.set_margin_start(12);
+    grid.set_margin_end(12);
+    grid.set_margin_bottom(12);
+
+    let rows: Vec<(&str, String)> = vec![
+        ("PID", obj.pid().to_string()),
+        ("Parent PID", obj.ppid().to_string()),
+        ("Name", obj.display_name()),
+        ("User", obj.user()),
+        ("State", obj.state()),
+        ("Nice", obj.nice().to_string()),
+        ("Threads", obj.threads().to_string()),
+        ("CPU %", util::format_percent(obj.cpu_percent())),
+        ("Memory", util::format_bytes(obj.memory_bytes())),
+        ("Container", if obj.container_type().is_empty() { "None".to_string() } else { obj.container_type() }),
+        ("Exe Path", obj.exe_path()),
+        ("Command", obj.command()),
+    ];
+
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let key = gtk::Label::new(Some(label));
+        key.set_halign(gtk::Align::Start);
+        key.add_css_class("dim-label");
+        let val = gtk::Label::new(Some(value));
+        val.set_halign(gtk::Align::Start);
+        val.set_selectable(true);
+        val.set_wrap(true);
+        grid.attach(&key, 0, i as i32, 1, 1);
+        grid.attach(&val, 1, i as i32, 1, 1);
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&grid)
+        .vexpand(true)
+        .build()
+}
+
+fn build_environ_tab(pid: i32) -> gtk::ScrolledWindow {
+    let list_box = gtk::ListBox::new();
+    list_box.set_selection_mode(gtk::SelectionMode::None);
+
+    if let Ok(environ) = std::fs::read_to_string(format!("/proc/{}/environ", pid)) {
+        let mut vars: Vec<&str> = environ.split('\0').filter(|s| !s.is_empty()).collect();
+        vars.sort();
+        for var in vars {
+            let label = gtk::Label::new(Some(var));
+            label.set_halign(gtk::Align::Start);
+            label.set_selectable(true);
+            label.set_wrap(true);
+            label.set_margin_top(2);
+            label.set_margin_bottom(2);
+            label.set_margin_start(8);
+            list_box.append(&label);
+        }
+    } else {
+        let label = gtk::Label::new(Some("Unable to read environment (permission denied?)"));
+        label.set_margin_top(12);
+        list_box.append(&label);
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&list_box)
+        .vexpand(true)
+        .build()
+}
+
+fn build_files_tab(pid: i32) -> gtk::ScrolledWindow {
+    let list_box = gtk::ListBox::new();
+    list_box.set_selection_mode(gtk::SelectionMode::None);
+
+    let fd_dir = format!("/proc/{}/fd", pid);
+    if let Ok(entries) = std::fs::read_dir(&fd_dir) {
+        let mut fds: Vec<(String, String)> = Vec::new();
+        for entry in entries.flatten() {
+            let fd_name = entry.file_name().to_string_lossy().to_string();
+            let target = std::fs::read_link(entry.path())
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "?".to_string());
+            fds.push((fd_name, target));
+        }
+        fds.sort_by(|a, b| {
+            a.0.parse::<u32>().unwrap_or(0).cmp(&b.0.parse::<u32>().unwrap_or(0))
+        });
+        for (fd, target) in &fds {
+            let label = gtk::Label::new(Some(&format!("fd {} → {}", fd, target)));
+            label.set_halign(gtk::Align::Start);
+            label.set_selectable(true);
+            label.set_margin_top(2);
+            label.set_margin_bottom(2);
+            label.set_margin_start(8);
+            list_box.append(&label);
+        }
+    } else {
+        let label = gtk::Label::new(Some("Unable to read file descriptors (permission denied?)"));
+        label.set_margin_top(12);
+        list_box.append(&label);
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&list_box)
+        .vexpand(true)
+        .build()
+}
+
+fn build_maps_tab(pid: i32) -> gtk::ScrolledWindow {
+    let list_box = gtk::ListBox::new();
+    list_box.set_selection_mode(gtk::SelectionMode::None);
+
+    if let Ok(maps) = std::fs::read_to_string(format!("/proc/{}/maps", pid)) {
+        for line in maps.lines().take(500) {
+            let label = gtk::Label::new(Some(line));
+            label.set_halign(gtk::Align::Start);
+            label.set_selectable(true);
+            label.set_margin_top(1);
+            label.set_margin_bottom(1);
+            label.set_margin_start(8);
+            label.add_css_class("monospace");
+            list_box.append(&label);
+        }
+    } else {
+        let label = gtk::Label::new(Some("Unable to read memory maps (permission denied?)"));
+        label.set_margin_top(12);
+        list_box.append(&label);
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&list_box)
+        .vexpand(true)
+        .build()
+}
+
+fn build_network_tab(pid: i32) -> gtk::ScrolledWindow {
+    use crate::backend::net_per_process;
+
+    let list_box = gtk::ListBox::new();
+    list_box.set_selection_mode(gtk::SelectionMode::None);
+
+    let connections = net_per_process::collect_process_connections(pid);
+    if connections.is_empty() {
+        let label = gtk::Label::new(Some("No network connections"));
+        label.set_margin_top(12);
+        list_box.append(&label);
+    } else {
+        // Header
+        let header = gtk::Label::new(Some("Proto    Local Address              Remote Address             State"));
+        header.set_halign(gtk::Align::Start);
+        header.add_css_class("monospace");
+        header.add_css_class("dim-label");
+        header.set_margin_start(8);
+        header.set_margin_top(4);
+        list_box.append(&header);
+
+        for conn in &connections {
+            let text = format!(
+                "{:<8} {}:{:<6} → {}:{:<6} {}",
+                conn.protocol, conn.local_addr, conn.local_port,
+                conn.remote_addr, conn.remote_port, conn.state
+            );
+            let label = gtk::Label::new(Some(&text));
+            label.set_halign(gtk::Align::Start);
+            label.set_selectable(true);
+            label.add_css_class("monospace");
+            label.set_margin_start(8);
+            label.set_margin_top(1);
+            label.set_margin_bottom(1);
+            list_box.append(&label);
+        }
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&list_box)
+        .vexpand(true)
+        .build()
+}
+
+fn build_cgroup_tab(pid: i32) -> gtk::ScrolledWindow {
+    let list_box = gtk::ListBox::new();
+    list_box.set_selection_mode(gtk::SelectionMode::None);
+
+    if let Ok(cgroup) = std::fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
+        for line in cgroup.lines() {
+            let label = gtk::Label::new(Some(line));
+            label.set_halign(gtk::Align::Start);
+            label.set_selectable(true);
+            label.set_margin_top(2);
+            label.set_margin_bottom(2);
+            label.set_margin_start(8);
+            list_box.append(&label);
+        }
+    } else {
+        let label = gtk::Label::new(Some("Unable to read cgroup info"));
+        label.set_margin_top(12);
+        list_box.append(&label);
+    }
+
+    gtk::ScrolledWindow::builder()
+        .child(&list_box)
+        .vexpand(true)
+        .build()
 }

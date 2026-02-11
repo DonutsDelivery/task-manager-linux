@@ -62,3 +62,11 @@ pub fn format_frequency(mhz: f64) -> String {
         format!("{:.0} MHz", mhz)
     }
 }
+
+pub fn format_temperature(celsius: f64) -> String {
+    if celsius > 0.0 {
+        format!("{:.0}°C", celsius)
+    } else {
+        "N/A".to_string()
+    }
+}

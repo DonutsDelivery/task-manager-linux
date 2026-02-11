@@ -163,6 +163,9 @@ fn read_process(pid: i32) -> Option<ProcessInfo> {
 
     info.display_name = info.name.clone();
 
+    // Container detection
+    info.container_type = detect_container_type(pid, &info.exe_path);
+
     Some(info)
 }
 
@@ -243,6 +246,38 @@ fn script_display_name(cmdline: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn detect_container_type(pid: i32, exe_path: &str) -> String {
+    // Check exe_path first (fast)
+    if exe_path.starts_with("/snap/") {
+        return "Snap".to_string();
+    }
+    if exe_path.contains("/.var/app/") || exe_path.contains("/app/com.") || exe_path.contains("/app/org.") {
+        return "Flatpak".to_string();
+    }
+
+    // Check cgroup for container hints
+    if let Ok(cgroup) = fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
+        let cgroup_lower = cgroup.to_lowercase();
+        if cgroup_lower.contains("docker") {
+            return "Docker".to_string();
+        }
+        if cgroup_lower.contains("podman") {
+            return "Podman".to_string();
+        }
+        if cgroup_lower.contains("lxc") {
+            return "LXC".to_string();
+        }
+        if cgroup_lower.contains("flatpak") {
+            return "Flatpak".to_string();
+        }
+        if cgroup_lower.contains("snap.") {
+            return "Snap".to_string();
+        }
+    }
+
+    String::new()
 }
 
 fn read_total_cpu_time() -> u64 {

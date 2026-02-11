@@ -9,6 +9,12 @@ mod desktop_resolver;
 mod window_resolver;
 pub mod de_restart;
 pub mod shortcut_setup;
+pub mod startup;
+pub mod services;
+pub mod users;
+pub mod battery;
+pub mod history;
+pub mod net_per_process;
 
 pub use collector::Collector;
 pub use desktop_resolver::DesktopResolver;

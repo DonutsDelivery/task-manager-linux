@@ -4,6 +4,8 @@ use crate::backend::gpu::GpuCollector;
 use crate::backend::memory::MemoryCollector;
 use crate::backend::network::NetworkCollector;
 use crate::backend::process::ProcessCollector;
+use crate::backend::battery::BatteryCollector;
+use crate::backend::history::AppHistoryTracker;
 use crate::backend::DesktopResolver;
 use crate::backend::WindowResolver;
 use crate::model::{AppGroup, SystemSnapshot};
@@ -37,6 +39,8 @@ impl Collector {
         let mut network_collector = NetworkCollector::new();
         let gpu_collector = GpuCollector::new();
         let mut process_collector = ProcessCollector::new();
+        let battery_collector = BatteryCollector::new();
+        let mut history_tracker = AppHistoryTracker::new();
         let desktop_resolver = DesktopResolver::new();
         let window_resolver = WindowResolver::new();
 
@@ -45,12 +49,13 @@ impl Collector {
         thread::sleep(Duration::from_millis(500));
 
         loop {
-            let (cpu_total, cpu_per_core, cpu_freq) = cpu_collector.collect();
+            let (cpu_total, cpu_per_core, cpu_freq, cpu_temp) = cpu_collector.collect();
             let memory = memory_collector.collect();
             let disk = disk_collector.collect();
             let network = network_collector.collect();
             let gpu_system = gpu_collector.collect_system();
             let gpu_vram = gpu_collector.collect_per_process();
+            let battery = battery_collector.collect();
             let window_titles = window_resolver.collect();
 
             let processes = process_collector.collect(
@@ -64,6 +69,19 @@ impl Collector {
 
             let app_groups = build_app_groups(&processes);
 
+            // Update history tracker
+            history_tracker.update(&app_groups);
+            let app_histories = history_tracker.snapshot();
+
+            let battery_model = crate::model::BatteryInfo {
+                available: battery.available,
+                percent: battery.percent,
+                status: battery.status,
+                power_watts: battery.power_watts,
+                time_remaining_secs: battery.time_remaining_secs,
+                ac_connected: battery.ac_connected,
+            };
+
             let snapshot = SystemSnapshot {
                 processes,
                 app_groups,
@@ -74,13 +92,16 @@ impl Collector {
                     model_name: cpu_collector.model_name.clone(),
                     frequency_mhz: cpu_freq,
                     uptime_secs: cpu::uptime_secs(),
+                    temperature_celsius: cpu_temp,
                 },
                 memory,
                 disk,
                 network,
                 gpu: gpu_system,
+                battery: battery_model,
                 process_count,
                 thread_count,
+                app_histories,
             };
 
             if self.tx.send(snapshot).is_err() {

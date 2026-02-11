@@ -1,5 +1,6 @@
 use super::ProcessInfo;
 use super::AppGroup;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct CpuInfo {
@@ -9,6 +10,7 @@ pub struct CpuInfo {
     pub model_name: String,
     pub frequency_mhz: f64,
     pub uptime_secs: u64,
+    pub temperature_celsius: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -62,6 +64,16 @@ pub struct GpuInfo {
     pub fan_speed_percent: u32,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BatteryInfo {
+    pub available: bool,
+    pub percent: f64,
+    pub status: String,
+    pub power_watts: f64,
+    pub time_remaining_secs: u64,
+    pub ac_connected: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemSnapshot {
     pub processes: Vec<ProcessInfo>,
@@ -71,8 +83,10 @@ pub struct SystemSnapshot {
     pub disk: DiskInfo,
     pub network: NetworkInfo,
     pub gpu: GpuInfo,
+    pub battery: BatteryInfo,
     pub process_count: usize,
     pub thread_count: u64,
+    pub app_histories: HashMap<String, crate::backend::history::AppHistory>,
 }
 
 impl Default for SystemSnapshot {
@@ -85,8 +99,10 @@ impl Default for SystemSnapshot {
             disk: DiskInfo::default(),
             network: NetworkInfo::default(),
             gpu: GpuInfo::default(),
+            battery: BatteryInfo::default(),
             process_count: 0,
             thread_count: 0,
+            app_histories: HashMap::new(),
         }
     }
 }

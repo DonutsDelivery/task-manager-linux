@@ -11,6 +11,9 @@ use crate::config::Config;
 use crate::model::SystemSnapshot;
 use crate::ui::performance_tab::PerformanceTab;
 use crate::ui::process_tab::ProcessTab;
+use crate::ui::startup_tab::StartupTab;
+use crate::ui::services_tab::ServicesTab;
+use crate::ui::users_tab::UsersTab;
 use crate::util;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -48,8 +51,24 @@ impl MainWindow {
             .build();
         performance_row.add_prefix(&gtk::Image::from_icon_name("utilities-system-monitor-symbolic"));
 
+        let startup_row = adw::ActionRow::builder()
+            .title("Startup")
+            .build();
+        startup_row.add_prefix(&gtk::Image::from_icon_name("application-x-executable-symbolic"));
+        let services_row = adw::ActionRow::builder()
+            .title("Services")
+            .build();
+        services_row.add_prefix(&gtk::Image::from_icon_name("system-run-symbolic"));
+        let users_row = adw::ActionRow::builder()
+            .title("Users")
+            .build();
+        users_row.add_prefix(&gtk::Image::from_icon_name("system-users-symbolic"));
+
         sidebar_list.append(&processes_row);
         sidebar_list.append(&performance_row);
+        sidebar_list.append(&startup_row);
+        sidebar_list.append(&services_row);
+        sidebar_list.append(&users_row);
 
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -68,6 +87,20 @@ impl MainWindow {
         let performance_tab = PerformanceTab::new();
         stack.add_named(&performance_tab.widget, Some("performance"));
 
+        // Startup tab
+        let mut startup_tab = StartupTab::new();
+        startup_tab.load();
+        stack.add_named(&startup_tab.widget, Some("startup"));
+
+        // Services tab
+        let mut services_tab = ServicesTab::new();
+        services_tab.load();
+        stack.add_named(&services_tab.widget, Some("services"));
+
+        // Users tab
+        let users_tab = UsersTab::new();
+        stack.add_named(&users_tab.widget, Some("users"));
+
         // Sidebar selection handler
         let stack_ref = stack.clone();
         sidebar_list.connect_row_selected(move |_, row| {
@@ -76,6 +109,9 @@ impl MainWindow {
                 match idx {
                     0 => stack_ref.set_visible_child_name("processes"),
                     1 => stack_ref.set_visible_child_name("performance"),
+                    2 => stack_ref.set_visible_child_name("startup"),
+                    3 => stack_ref.set_visible_child_name("services"),
+                    4 => stack_ref.set_visible_child_name("users"),
                     _ => {}
                 }
             }
@@ -187,10 +223,12 @@ impl MainWindow {
         // Poll for updates from the collector
         let process_tab = Rc::new(RefCell::new(process_tab));
         let performance_tab = Rc::new(RefCell::new(performance_tab));
+        let users_tab = Rc::new(RefCell::new(users_tab));
         let latest_snapshot: Rc<RefCell<Option<SystemSnapshot>>> = Rc::new(RefCell::new(None));
 
         let process_tab_clone = process_tab.clone();
         let performance_tab_clone = performance_tab.clone();
+        let users_tab_clone = users_tab.clone();
         let snapshot_clone = latest_snapshot.clone();
         let status_processes_clone = status_processes.clone();
         let status_cpu_clone = status_cpu.clone();
@@ -206,6 +244,7 @@ impl MainWindow {
             if let Some(snapshot) = snapshot_clone.borrow().as_ref() {
                 process_tab_clone.borrow_mut().update(snapshot);
                 performance_tab_clone.borrow_mut().update(snapshot);
+                users_tab_clone.borrow_mut().update(snapshot);
 
                 // Update status bar
                 status_processes_clone.set_text(&format!("Processes: {}", snapshot.process_count));

@@ -3,27 +3,195 @@ use nvml_wrapper::Nvml;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// Sysfs helpers
+// ---------------------------------------------------------------------------
+
+fn read_sysfs_u64(path: &str) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn read_sysfs_string(path: &str) -> Option<String> {
+    Some(std::fs::read_to_string(path).ok()?.trim().to_string())
+}
+
+fn find_hwmon_path(device_path: &str) -> Option<String> {
+    let hwmon_dir = format!("{}/hwmon", device_path);
+    let entries = std::fs::read_dir(&hwmon_dir).ok()?;
+    for entry in entries.flatten() {
+        return Some(entry.path().to_string_lossy().to_string());
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// GPU backend detection
+// ---------------------------------------------------------------------------
+
+enum GpuBackend {
+    Nvidia(Nvml),
+    Amd {
+        card_path: String,   // e.g. /sys/class/drm/card0
+        device_path: String, // e.g. /sys/class/drm/card0/device
+        hwmon_path: Option<String>,
+        name: String,
+    },
+    Intel {
+        card_path: String,
+        device_path: String,
+        hwmon_path: Option<String>,
+        name: String,
+    },
+    None,
+}
+
+/// Scan /sys/class/drm/card* for a card whose device/vendor matches `vendor_id`.
+/// Returns (card_path, device_path) for the first match.
+fn find_drm_card_by_vendor(vendor_id: &str) -> Option<(String, String)> {
+    let drm_dir = std::fs::read_dir("/sys/class/drm").ok()?;
+    let mut cards: Vec<_> = drm_dir
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            // Match card0, card1, ... but not card0-DP-1 etc.
+            name.starts_with("card") && name[4..].chars().all(|c| c.is_ascii_digit())
+        })
+        .collect();
+    // Sort so we check card0 first
+    cards.sort_by_key(|e| e.file_name());
+
+    for entry in cards {
+        let card_path = entry.path().to_string_lossy().to_string();
+        let device_path = format!("{}/device", card_path);
+        let vendor_path = format!("{}/vendor", device_path);
+        if let Some(vendor) = read_sysfs_string(&vendor_path) {
+            if vendor == vendor_id {
+                return Some((card_path, device_path));
+            }
+        }
+    }
+    None
+}
+
+fn detect_amd_gpu_name(device_path: &str, hwmon_path: &Option<String>) -> String {
+    // Try product_name first (newer kernels / some dGPUs)
+    if let Some(name) = read_sysfs_string(&format!("{}/product_name", device_path)) {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    // Try hwmon name
+    if let Some(ref hp) = hwmon_path {
+        if let Some(name) = read_sysfs_string(&format!("{}/name", hp)) {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    "AMD GPU".to_string()
+}
+
+fn detect_intel_gpu_name(card_path: &str, device_path: &str) -> String {
+    // Try device/label (sometimes present on discrete Intel Arc)
+    if let Some(name) = read_sysfs_string(&format!("{}/label", device_path)) {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    // Try card-level label
+    if let Some(name) = read_sysfs_string(&format!("{}/device/label", card_path)) {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    "Intel GPU".to_string()
+}
+
+fn detect_backend() -> GpuBackend {
+    // 1) Try NVIDIA via NVML
+    if let Ok(nvml) = Nvml::init() {
+        log::info!("NVML initialized successfully");
+        return GpuBackend::Nvidia(nvml);
+    }
+
+    // 2) Try AMD (vendor 0x1002)
+    if let Some((card_path, device_path)) = find_drm_card_by_vendor("0x1002") {
+        let hwmon_path = find_hwmon_path(&device_path);
+        let name = detect_amd_gpu_name(&device_path, &hwmon_path);
+        log::info!("AMD GPU detected via sysfs: {} ({})", name, card_path);
+        return GpuBackend::Amd {
+            card_path,
+            device_path,
+            hwmon_path,
+            name,
+        };
+    }
+
+    // 3) Try Intel (vendor 0x8086)
+    if let Some((card_path, device_path)) = find_drm_card_by_vendor("0x8086") {
+        let hwmon_path = find_hwmon_path(&device_path);
+        let name = detect_intel_gpu_name(&card_path, &device_path);
+        log::info!("Intel GPU detected via sysfs: {} ({})", name, card_path);
+        return GpuBackend::Intel {
+            card_path,
+            device_path,
+            hwmon_path,
+            name,
+        };
+    }
+
+    log::warn!("No GPU detected - GPU monitoring disabled");
+    GpuBackend::None
+}
+
+// ---------------------------------------------------------------------------
+// GpuCollector
+// ---------------------------------------------------------------------------
+
 pub struct GpuCollector {
-    nvml: Option<Nvml>,
+    backend: GpuBackend,
 }
 
 impl GpuCollector {
     pub fn new() -> Self {
-        let nvml = Nvml::init().ok();
-        if nvml.is_some() {
-            log::info!("NVML initialized successfully");
-        } else {
-            log::warn!("NVML not available - GPU monitoring disabled");
+        Self {
+            backend: detect_backend(),
         }
-        Self { nvml }
     }
 
     pub fn collect_system(&self) -> GpuInfo {
-        let nvml = match &self.nvml {
-            Some(n) => n,
-            None => return GpuInfo::default(),
-        };
+        match &self.backend {
+            GpuBackend::Nvidia(nvml) => self.collect_nvidia(nvml),
+            GpuBackend::Amd {
+                card_path: _,
+                device_path,
+                hwmon_path,
+                name,
+            } => Self::collect_amd(device_path, hwmon_path, name),
+            GpuBackend::Intel {
+                card_path,
+                device_path: _,
+                hwmon_path,
+                name,
+            } => Self::collect_intel(card_path, hwmon_path, name),
+            GpuBackend::None => GpuInfo::default(),
+        }
+    }
 
+    pub fn collect_per_process(&self) -> HashMap<u32, u64> {
+        match &self.backend {
+            GpuBackend::Nvidia(nvml) => self.collect_per_process_nvidia(nvml),
+            // Per-process VRAM tracking not available via sysfs for AMD/Intel
+            _ => HashMap::new(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // NVIDIA (NVML)
+    // ------------------------------------------------------------------
+
+    fn collect_nvidia(&self, nvml: &Nvml) -> GpuInfo {
         let device = match nvml.device_by_index(0) {
             Ok(d) => d,
             Err(_) => return GpuInfo::default(),
@@ -32,7 +200,9 @@ impl GpuCollector {
         let name = device.name().unwrap_or_else(|_| "Unknown GPU".to_string());
         let utilization = device.utilization_rates().ok();
         let memory_info = device.memory_info().ok();
-        let temp = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu).unwrap_or(0);
+        let temp = device
+            .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+            .unwrap_or(0);
         let power = device.power_usage().unwrap_or(0) as f64 / 1000.0; // mW to W
         let power_limit = device.enforced_power_limit().unwrap_or(0) as f64 / 1000.0;
         let fan = device.fan_speed(0).unwrap_or(0);
@@ -50,13 +220,8 @@ impl GpuCollector {
         }
     }
 
-    pub fn collect_per_process(&self) -> HashMap<u32, u64> {
+    fn collect_per_process_nvidia(&self, nvml: &Nvml) -> HashMap<u32, u64> {
         let mut map = HashMap::new();
-        let nvml = match &self.nvml {
-            Some(n) => n,
-            None => return map,
-        };
-
         let device = match nvml.device_by_index(0) {
             Ok(d) => d,
             Err(_) => return map,
@@ -82,5 +247,126 @@ impl GpuCollector {
         }
 
         map
+    }
+
+    // ------------------------------------------------------------------
+    // AMD (sysfs)
+    // ------------------------------------------------------------------
+
+    fn collect_amd(device_path: &str, hwmon_path: &Option<String>, name: &str) -> GpuInfo {
+        let utilization = read_sysfs_u64(&format!("{}/gpu_busy_percent", device_path))
+            .map(|v| v as f64)
+            .unwrap_or(0.0);
+
+        let vram_total =
+            read_sysfs_u64(&format!("{}/mem_info_vram_total", device_path)).unwrap_or(0);
+        let vram_used =
+            read_sysfs_u64(&format!("{}/mem_info_vram_used", device_path)).unwrap_or(0);
+
+        let mut temperature: u32 = 0;
+        let mut power_watts: f64 = 0.0;
+        let mut fan_speed_percent: u32 = 0;
+
+        if let Some(ref hp) = hwmon_path {
+            // temp1_input is in millidegrees Celsius
+            temperature = read_sysfs_u64(&format!("{}/temp1_input", hp))
+                .map(|v| (v / 1000) as u32)
+                .unwrap_or(0);
+
+            // power1_average is in microwatts
+            power_watts = read_sysfs_u64(&format!("{}/power1_average", hp))
+                .map(|v| v as f64 / 1_000_000.0)
+                .unwrap_or(0.0);
+
+            // Fan speed: pwm1 is 0-255, convert to percent
+            // Or try fan1_input (RPM) — use pwm1 for percentage
+            fan_speed_percent = read_sysfs_u64(&format!("{}/pwm1", hp))
+                .map(|v| ((v as f64 / 255.0) * 100.0) as u32)
+                .unwrap_or(0);
+        }
+
+        // AMD sysfs doesn't expose a power limit file consistently;
+        // try power1_cap (microwatts)
+        let power_limit_watts = hwmon_path
+            .as_ref()
+            .and_then(|hp| read_sysfs_u64(&format!("{}/power1_cap", hp)))
+            .map(|v| v as f64 / 1_000_000.0)
+            .unwrap_or(0.0);
+
+        GpuInfo {
+            available: true,
+            name: name.to_string(),
+            utilization_percent: utilization,
+            vram_used,
+            vram_total,
+            temperature,
+            power_watts,
+            power_limit_watts,
+            fan_speed_percent,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Intel (sysfs)
+    // ------------------------------------------------------------------
+
+    fn collect_intel(card_path: &str, hwmon_path: &Option<String>, name: &str) -> GpuInfo {
+        // Intel integrated GPUs expose much less info than discrete.
+        // Intel Arc (discrete) may have hwmon entries.
+
+        let mut temperature: u32 = 0;
+        let mut power_watts: f64 = 0.0;
+        let mut fan_speed_percent: u32 = 0;
+
+        if let Some(ref hp) = hwmon_path {
+            temperature = read_sysfs_u64(&format!("{}/temp1_input", hp))
+                .map(|v| (v / 1000) as u32)
+                .unwrap_or(0);
+
+            power_watts = read_sysfs_u64(&format!("{}/power1_average", hp))
+                .map(|v| v as f64 / 1_000_000.0)
+                .unwrap_or(0.0);
+
+            fan_speed_percent = read_sysfs_u64(&format!("{}/pwm1", hp))
+                .map(|v| ((v as f64 / 255.0) * 100.0) as u32)
+                .unwrap_or(0);
+        }
+
+        let power_limit_watts = hwmon_path
+            .as_ref()
+            .and_then(|hp| read_sysfs_u64(&format!("{}/power1_cap", hp)))
+            .map(|v| v as f64 / 1_000_000.0)
+            .unwrap_or(0.0);
+
+        // Intel discrete (Arc) may have VRAM info under device/
+        let device_path = format!("{}/device", card_path);
+        let vram_total =
+            read_sysfs_u64(&format!("{}/mem_info_vram_total", device_path)).unwrap_or(0);
+        let vram_used =
+            read_sysfs_u64(&format!("{}/mem_info_vram_used", device_path)).unwrap_or(0);
+
+        // Try to read current frequency (informational — fits utilization_percent
+        // as a rough indicator when no busy_percent exists)
+        let _cur_freq = read_sysfs_u64(&format!("{}/gt_cur_freq_mhz", card_path));
+        let _max_freq = read_sysfs_u64(&format!("{}/gt_max_freq_mhz", card_path));
+
+        // Utilization: Intel doesn't expose gpu_busy_percent in sysfs for
+        // most cases, but some discrete cards may. Try it.
+        let utilization =
+            read_sysfs_u64(&format!("{}/gpu_busy_percent", device_path))
+                .map(|v| v as f64)
+                .unwrap_or(0.0);
+
+        GpuInfo {
+            available: true,
+            name: name.to_string(),
+            utilization_percent: utilization,
+            vram_used,
+            vram_total,
+            temperature,
+            power_watts,
+            power_limit_watts,
+            fan_speed_percent,
+        }
     }
 }
