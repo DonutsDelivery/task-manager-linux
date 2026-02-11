@@ -74,7 +74,7 @@ impl DesktopResolver {
                 .unwrap_or(basename)
                 .trim();
 
-            if !basename.is_empty() && !name.is_empty() {
+            if !basename.is_empty() && !name.is_empty() && !is_generic_interpreter(basename) {
                 self.name_map.insert(basename.to_string(), name.clone());
                 self.name_map.insert(basename.to_lowercase(), name);
             }
@@ -84,6 +84,23 @@ impl DesktopResolver {
     pub fn names(&self) -> &HashMap<String, String> {
         &self.name_map
     }
+}
+
+/// Interpreters and shells that many apps use as their Exec command.
+/// Mapping these would mislabel unrelated processes.
+fn is_generic_interpreter(basename: &str) -> bool {
+    let name = basename.to_lowercase();
+    matches!(
+        name.as_str(),
+        "bash" | "sh" | "zsh" | "fish" | "dash" | "csh" | "tcsh"
+        | "python" | "python3" | "python2"
+        | "perl" | "ruby" | "node" | "nodejs"
+        | "java" | "javaw"
+        | "env" | "pkexec" | "sudo" | "flatpak" | "snap"
+        | "wine" | "wine64" | "proton"
+        | "dotnet" | "mono"
+        | "electron"
+    )
 }
 
 fn desktop_entry_dirs() -> Vec<PathBuf> {

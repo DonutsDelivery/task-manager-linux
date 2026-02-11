@@ -191,7 +191,58 @@ fn resolve_display_name(
         return;
     }
 
-    // Priority 3: comm name (already set as default)
+    // Priority 3: for interpreters (python, bash, etc.), derive name from script path in cmdline
+    if is_interpreter(exe_basename) {
+        if let Some(name) = script_display_name(&info.command) {
+            info.display_name = name;
+            return;
+        }
+    }
+
+    // Priority 4: comm name (already set as default)
+}
+
+/// Check if an executable basename is a script interpreter.
+fn is_interpreter(basename: &str) -> bool {
+    let name = basename.to_lowercase();
+    matches!(
+        name.as_str(),
+        "bash" | "sh" | "zsh" | "fish" | "dash"
+        | "python" | "python3" | "python2"
+        | "perl" | "ruby" | "node" | "nodejs"
+        | "java" | "javaw" | "dotnet" | "mono"
+    )
+}
+
+/// Extract a display name from the script path in a command line.
+/// e.g. "python /home/user/Programs/ComfyUI/main.py --port 8188" -> "ComfyUI"
+fn script_display_name(cmdline: &str) -> Option<String> {
+    // Find first argument that looks like a script path (contains '/' or ends in script extension)
+    for arg in cmdline.split_whitespace().skip(1) {
+        if arg.starts_with('-') {
+            continue;
+        }
+        if arg.contains('/') || arg.ends_with(".py") || arg.ends_with(".sh")
+            || arg.ends_with(".rb") || arg.ends_with(".pl") || arg.ends_with(".js")
+        {
+            let path = std::path::Path::new(arg);
+            let stem = path.file_stem()?.to_string_lossy();
+
+            // For generic entry points like main.py, app.py, use parent dir name
+            let generic = ["main", "app", "run", "__main__", "manage", "server", "index", "cli"];
+            if generic.contains(&stem.as_ref()) {
+                if let Some(parent) = path.parent() {
+                    let dir_name = parent.file_name()?.to_string_lossy();
+                    if !dir_name.is_empty() {
+                        return Some(dir_name.to_string());
+                    }
+                }
+            }
+
+            return Some(stem.to_string());
+        }
+    }
+    None
 }
 
 fn read_total_cpu_time() -> u64 {

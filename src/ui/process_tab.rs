@@ -382,6 +382,32 @@ impl ProcessTab {
         state_col.set_sorter(Some(&state_sorter));
         column_view.append_column(&state_col);
 
+        // Path column
+        let path_factory = gtk::SignalListItemFactory::new();
+        path_factory.connect_setup(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let label = gtk::Label::new(None);
+            label.set_halign(gtk::Align::Start);
+            label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            item.set_child(Some(&label));
+        });
+        path_factory.connect_bind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let label = item.child().and_downcast::<gtk::Label>().unwrap();
+            label.set_text(&obj.exe_path());
+        });
+        let path_col = gtk::ColumnViewColumn::new(Some("Path"), Some(path_factory));
+        path_col.set_fixed_width(200);
+        path_col.set_resizable(true);
+        let path_sorter = gtk::CustomSorter::new(|a, b| {
+            let pa = a.downcast_ref::<ProcessObject>().unwrap();
+            let pb = b.downcast_ref::<ProcessObject>().unwrap();
+            pa.exe_path().cmp(&pb.exe_path()).into()
+        });
+        path_col.set_sorter(Some(&path_sorter));
+        column_view.append_column(&path_col);
+
         // Enable sorting via the column view sorter
         let cv_sorter = column_view.sorter();
         if let Some(s) = cv_sorter {
