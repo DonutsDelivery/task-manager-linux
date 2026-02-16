@@ -106,7 +106,7 @@ impl PerformanceTab {
     pub fn update(&mut self, snapshot: &SystemSnapshot) {
         self.cpu_panel.update(&snapshot.cpu);
         self.memory_panel.update(&snapshot.memory);
-        self.gpu_panel.update(&snapshot.gpu);
+        self.gpu_panel.update(snapshot.gpu.first().unwrap_or(&crate::model::GpuInfo::default()));
         self.disk_panel.update(&snapshot.disk);
         self.network_panel.update(&snapshot.network);
         self.battery_panel.update(&snapshot.battery);

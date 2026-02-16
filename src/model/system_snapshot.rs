@@ -11,6 +11,8 @@ pub struct CpuInfo {
     pub frequency_mhz: f64,
     pub uptime_secs: u64,
     pub temperature_celsius: f64,
+    pub per_core_temperatures: Vec<f64>,
+    pub per_core_frequencies: Vec<(f64, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,7 +84,7 @@ pub struct SystemSnapshot {
     pub memory: MemoryInfo,
     pub disk: DiskInfo,
     pub network: NetworkInfo,
-    pub gpu: GpuInfo,
+    pub gpu: Vec<GpuInfo>,
     pub battery: BatteryInfo,
     pub process_count: usize,
     pub thread_count: u64,
@@ -98,7 +100,7 @@ impl Default for SystemSnapshot {
             memory: MemoryInfo::default(),
             disk: DiskInfo::default(),
             network: NetworkInfo::default(),
-            gpu: GpuInfo::default(),
+            gpu: Vec::new(),
             battery: BatteryInfo::default(),
             process_count: 0,
             thread_count: 0,

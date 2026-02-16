@@ -22,8 +22,12 @@ impl StartupCollector {
         let system_dir = PathBuf::from("/etc/xdg/autostart");
         Self::scan_autostart_dir(&system_dir, &mut entries, &mut seen_files);
 
-        // Scan systemd user units
-        Self::scan_systemd_user(&mut entries);
+        // Scan systemd user units (only if systemd is available)
+        if crate::backend::services::is_systemd_available() {
+            Self::scan_systemd_user(&mut entries);
+        } else {
+            log::info!("systemd not detected, skipping systemd user units scan");
+        }
 
         // Sort by name for consistent display
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -288,14 +292,26 @@ impl StartupCollector {
             let home = std::env::var("HOME").map_err(|e| format!("Cannot get HOME: {}", e))?;
             let user_dir = PathBuf::from(format!("{}/.config/autostart", home));
             fs::create_dir_all(&user_dir)
-                .map_err(|e| format!("Cannot create autostart dir: {}", e))?;
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                        "Cannot create autostart dir: filesystem is read-only (immutable distro?)".to_string()
+                    } else {
+                        format!("Cannot create autostart dir: {}", e)
+                    }
+                })?;
             let dest = user_dir.join(
                 path.file_name()
                     .ok_or_else(|| "Invalid file path".to_string())?,
             );
             if !dest.exists() {
                 fs::copy(path, &dest)
-                    .map_err(|e| format!("Cannot copy desktop file: {}", e))?;
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                            "Cannot copy desktop file: filesystem is read-only (immutable distro?)".to_string()
+                        } else {
+                            format!("Cannot copy desktop file: {}", e)
+                        }
+                    })?;
             }
             dest
         } else {
@@ -356,7 +372,13 @@ impl StartupCollector {
         };
 
         fs::write(&user_path, new_content)
-            .map_err(|e| format!("Cannot write {}: {}", user_path.display(), e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                    format!("Cannot write {}: filesystem is read-only (immutable distro?)", user_path.display())
+                } else {
+                    format!("Cannot write {}: {}", user_path.display(), e)
+                }
+            })?;
 
         log::info!(
             "Toggled autostart for '{}' to {} ({})",
@@ -369,6 +391,10 @@ impl StartupCollector {
     }
 
     fn toggle_systemd_user(entry: &StartupEntry, enabled: bool) -> Result<(), String> {
+        if !crate::backend::services::is_systemd_available() {
+            return Err("systemd not available on this system".to_string());
+        }
+
         let action = if enabled { "enable" } else { "disable" };
         let unit = &entry.file_path;
 
@@ -379,9 +405,16 @@ impl StartupCollector {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_str = stderr.trim();
+
+            // Check for read-only filesystem errors (immutable distros)
+            if stderr_str.contains("Read-only file system") {
+                return Err("Cannot modify: filesystem is read-only (immutable distro?)".to_string());
+            }
+
             return Err(format!(
                 "systemctl --user {} {} failed: {}",
-                action, unit, stderr
+                action, unit, stderr_str
             ));
         }
 
@@ -400,6 +433,10 @@ impl StartupCollector {
             return Err("Not a systemd service".to_string());
         }
 
+        if !crate::backend::services::is_systemd_available() {
+            return Err("systemd not available on this system".to_string());
+        }
+
         let valid_actions = ["start", "stop", "restart"];
         if !valid_actions.contains(&action) {
             return Err(format!("Invalid action: {}", action));
@@ -413,9 +450,16 @@ impl StartupCollector {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_str = stderr.trim();
+
+            // Check for read-only filesystem errors (immutable distros)
+            if stderr_str.contains("Read-only file system") {
+                return Err("Cannot modify: filesystem is read-only (immutable distro?)".to_string());
+            }
+
             return Err(format!(
                 "systemctl --user {} {} failed: {}",
-                action, unit, stderr.trim()
+                action, unit, stderr_str
             ));
         }
 
@@ -459,14 +503,26 @@ impl StartupCollector {
             let home = std::env::var("HOME").map_err(|e| format!("Cannot get HOME: {}", e))?;
             let user_dir = PathBuf::from(format!("{}/.config/autostart", home));
             fs::create_dir_all(&user_dir)
-                .map_err(|e| format!("Cannot create autostart dir: {}", e))?;
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                        "Cannot create autostart dir: filesystem is read-only (immutable distro?)".to_string()
+                    } else {
+                        format!("Cannot create autostart dir: {}", e)
+                    }
+                })?;
             let dest = user_dir.join(
                 path.file_name()
                     .ok_or_else(|| "Invalid file path".to_string())?,
             );
             if !dest.exists() {
                 fs::copy(path, &dest)
-                    .map_err(|e| format!("Cannot copy desktop file: {}", e))?;
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                            "Cannot copy desktop file: filesystem is read-only (immutable distro?)".to_string()
+                        } else {
+                            format!("Cannot copy desktop file: {}", e)
+                        }
+                    })?;
             }
             dest
         } else {
@@ -515,7 +571,13 @@ impl StartupCollector {
         };
 
         fs::write(&user_path, new_content)
-            .map_err(|e| format!("Cannot write {}: {}", user_path.display(), e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+                    format!("Cannot write {}: filesystem is read-only (immutable distro?)", user_path.display())
+                } else {
+                    format!("Cannot write {}: {}", user_path.display(), e)
+                }
+            })?;
 
         Ok(())
     }

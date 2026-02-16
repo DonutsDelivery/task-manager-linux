@@ -1,10 +1,22 @@
 use crate::model::service_entry::ServiceEntry;
 use std::process::Command;
 
+/// Check if systemd is the init system
+pub fn is_systemd_available() -> bool {
+    // Check for /run/systemd/system directory (standard way to detect systemd)
+    std::path::Path::new("/run/systemd/system").exists()
+}
+
 pub struct ServicesCollector;
 
 impl ServicesCollector {
     pub fn collect() -> Vec<ServiceEntry> {
+        // Check if systemd is available first
+        if !is_systemd_available() {
+            log::info!("systemd not detected, returning empty service list");
+            return Vec::new();
+        }
+
         let output = match Command::new("systemctl")
             .args(["list-units", "--type=service", "--all", "--no-legend", "--no-pager"])
             .output()
@@ -73,6 +85,11 @@ impl ServicesCollector {
     }
 
     pub fn service_action(name: &str, action: &str) -> Result<(), String> {
+        // Check if systemd is available
+        if !is_systemd_available() {
+            return Err("systemd not available on this system".to_string());
+        }
+
         let valid_actions = ["start", "stop", "restart", "enable", "disable"];
         if !valid_actions.contains(&action) {
             return Err(format!("Invalid action: {}", action));
@@ -93,12 +110,19 @@ impl ServicesCollector {
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_str = stderr.trim();
+
+            // Check for read-only filesystem errors (immutable distros)
+            if stderr_str.contains("Read-only file system") {
+                return Err("Cannot modify: filesystem is read-only (immutable distro?)".to_string());
+            }
+
             Err(format!(
                 "systemctl {} {} failed (exit {}): {}",
                 action,
                 service_name,
                 output.status,
-                stderr.trim()
+                stderr_str
             ))
         }
     }
@@ -106,6 +130,10 @@ impl ServicesCollector {
 
 /// Look up the UnitFileState for a given unit via systemctl show.
 fn get_unit_file_state(unit: &str) -> String {
+    if !is_systemd_available() {
+        return String::new();
+    }
+
     let output = Command::new("systemctl")
         .args(["show", "--property=UnitFileState", "--no-pager", unit])
         .output();

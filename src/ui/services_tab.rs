@@ -1,12 +1,14 @@
 use gtk4 as gtk;
+use libadwaita as adw;
 use gtk::prelude::*;
+use adw::prelude::*;
 use gtk::glib;
 use gtk::gio;
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::backend::services::ServicesCollector;
+use crate::backend::services::{ServicesCollector, is_systemd_available};
 
 // ---------------------------------------------------------------------------
 // ServiceObject - GObject wrapper for a systemd service entry
@@ -82,6 +84,8 @@ pub struct ServicesTab {
     search_entry: gtk::SearchEntry,
     filter_dropdown: gtk::DropDown,
     filter: gtk::CustomFilter,
+    content_box: gtk::Box,
+    status_page: adw::StatusPage,
 }
 
 impl ServicesTab {
@@ -351,7 +355,29 @@ impl ServicesTab {
             .hexpand(true)
             .child(&column_view)
             .build();
-        widget.append(&scroll);
+
+        // --- Status page for non-systemd systems ---
+        let status_page = adw::StatusPage::builder()
+            .icon_name("dialog-information-symbolic")
+            .title("systemd not detected")
+            .description("Services tab requires systemd to be available")
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        // Content box: either scroll view or status page
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content_box.set_vexpand(true);
+        content_box.set_hexpand(true);
+
+        // Decide which to show based on systemd availability
+        if is_systemd_available() {
+            content_box.append(&scroll);
+        } else {
+            content_box.append(&status_page);
+        }
+
+        widget.append(&content_box);
 
         // --- Context menu ---
         let menu = gio::Menu::new();
@@ -479,12 +505,16 @@ impl ServicesTab {
             search_entry,
             filter_dropdown,
             filter,
+            content_box,
+            status_page,
         }
     }
 
     /// Load (or reload) the service list from systemd.
     pub fn load(&mut self) {
-        populate_store(&self.store);
+        if is_systemd_available() {
+            populate_store(&self.store);
+        }
     }
 }
 

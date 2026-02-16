@@ -166,6 +166,43 @@ fn read_process(pid: i32) -> Option<ProcessInfo> {
     // Container detection
     info.container_type = detect_container_type(pid, &info.exe_path);
 
+    // Read cgroup info
+    if let Ok(cgroup_content) = fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
+        // cgroups v2 format: single line "0::/user.slice/user-1000.slice/..."
+        // cgroups v1 format: multiple lines "N:controller:/path"
+        // Take the last component path
+        for line in cgroup_content.lines() {
+            if line.starts_with("0::") {
+                info.cgroup = line[3..].trim().to_string();
+                break;
+            }
+        }
+        if info.cgroup.is_empty() {
+            // v1 fallback: take first line's path
+            if let Some(line) = cgroup_content.lines().next() {
+                if let Some(path) = line.rsplitn(2, ':').next() {
+                    info.cgroup = path.trim().to_string();
+                }
+            }
+        }
+
+        // Extract systemd unit name from cgroup path
+        // e.g. "/system.slice/nginx.service" → "nginx.service"
+        if let Some(unit) = info.cgroup.rsplit('/').next() {
+            if unit.contains('.') && (unit.ends_with(".service") || unit.ends_with(".scope") || unit.ends_with(".slice")) {
+                info.systemd_unit = unit.to_string();
+            }
+        }
+    }
+
+    // Read I/O priority
+    let (io_class, io_priority) = read_io_priority(pid);
+    info.io_class = io_class;
+    info.io_priority = io_priority;
+
+    // Read security label
+    info.security_label = read_security_label(pid);
+
     Some(info)
 }
 
@@ -257,6 +294,11 @@ fn detect_container_type(pid: i32, exe_path: &str) -> String {
         return "Flatpak".to_string();
     }
 
+    // AppImage detection: check for .mount_ in path or .AppImage in path
+    if exe_path.contains(".mount_") || exe_path.contains(".AppImage") {
+        return "AppImage".to_string();
+    }
+
     // Check cgroup for container hints
     if let Ok(cgroup) = fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
         let cgroup_lower = cgroup.to_lowercase();
@@ -274,6 +316,19 @@ fn detect_container_type(pid: i32, exe_path: &str) -> String {
         }
         if cgroup_lower.contains("snap.") {
             return "Snap".to_string();
+        }
+    }
+
+    // Enhanced Flatpak detection: check if /.flatpak-info exists in process root
+    if fs::metadata(format!("/proc/{}/root/.flatpak-info", pid)).is_ok() {
+        return "Flatpak".to_string();
+    }
+
+    // Check if root points to a flatpak runtime
+    if let Ok(root_link) = fs::read_link(format!("/proc/{}/root", pid)) {
+        let root_path = root_link.to_string_lossy();
+        if root_path.contains("flatpak") {
+            return "Flatpak".to_string();
         }
     }
 
@@ -326,4 +381,66 @@ fn get_username(uid: u32) -> String {
         .and_then(|line| line.split(':').next())
         .map(|s| s.to_string())
         .unwrap_or_else(|| uid.to_string())
+}
+
+fn read_io_priority(pid: i32) -> (String, i32) {
+    // Use the ioprio_get syscall via libc
+    // syscall number: SYS_ioprio_get (platform-specific)
+    // ioprio_get(IOPRIO_WHO_PROCESS, pid) returns a u32
+    // class = (ioprio >> 13) & 0x3
+    // data = ioprio & 0x1fff (but typically 0-7)
+
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        const SYS_IOPRIO_GET: i64 = 252;
+        #[cfg(target_arch = "aarch64")]
+        const SYS_IOPRIO_GET: i64 = 31;
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        const SYS_IOPRIO_GET: i64 = 252; // Fallback to x86_64
+
+        const IOPRIO_WHO_PROCESS: i32 = 1;
+
+        let result = libc::syscall(SYS_IOPRIO_GET, IOPRIO_WHO_PROCESS, pid);
+        if result < 0 {
+            return (String::new(), -1);
+        }
+        let ioprio = result as u32;
+        let class = (ioprio >> 13) & 0x3;
+        let data = (ioprio & 0x1fff) as i32;
+
+        let class_name = match class {
+            1 => "realtime",
+            2 => "best-effort",
+            3 => "idle",
+            _ => "none",
+        };
+        (class_name.to_string(), data)
+    }
+}
+
+fn read_security_label(pid: i32) -> String {
+    // Try SELinux first
+    if let Ok(label) = fs::read_to_string(format!("/proc/{}/attr/current", pid)) {
+        let label = label.trim().trim_end_matches('\0');
+        if !label.is_empty() && label != "unconfined" {
+            // Check if it looks like SELinux (colon-separated format)
+            if label.contains(':') && !label.contains(" (enforce)") && !label.contains(" (complain)") {
+                return format!("SELinux: {}", label);
+            }
+            // AppArmor labels look like "profile_name (enforce)" or "profile_name (complain)"
+            if label.contains(" (enforce)") || label.contains(" (complain)") {
+                return format!("AppArmor: {}", label);
+            }
+        }
+    }
+
+    // Try AppArmor-specific path
+    if let Ok(label) = fs::read_to_string(format!("/proc/{}/attr/apparmor/current", pid)) {
+        let label = label.trim().trim_end_matches('\0');
+        if !label.is_empty() && label != "unconfined" {
+            return format!("AppArmor: {}", label);
+        }
+    }
+
+    String::new()
 }

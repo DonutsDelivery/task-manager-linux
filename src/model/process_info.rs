@@ -23,6 +23,14 @@ pub struct ProcessInfo {
     pub uid: u32,
     pub user: String,
     pub container_type: String,
+    // Cgroup/systemd slice
+    pub cgroup: String,
+    pub systemd_unit: String,
+    // I/O scheduling
+    pub io_class: String,
+    pub io_priority: i32,
+    // Security context
+    pub security_label: String,
     // Internal tracking for CPU delta calculation
     pub total_cpu_time: u64,
     pub prev_cpu_time: u64,
@@ -54,6 +62,11 @@ impl Default for ProcessInfo {
             uid: 0,
             user: String::new(),
             container_type: String::new(),
+            cgroup: String::new(),
+            systemd_unit: String::new(),
+            io_class: String::new(),
+            io_priority: -1,
+            security_label: String::new(),
             total_cpu_time: 0,
             prev_cpu_time: 0,
             prev_disk_read: 0,

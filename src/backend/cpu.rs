@@ -19,7 +19,7 @@ impl CpuCollector {
         }
     }
 
-    pub fn collect(&mut self) -> (f64, Vec<f64>, f64, f64) {
+    pub fn collect(&mut self) -> (f64, Vec<f64>, f64, f64, Vec<f64>, Vec<(f64, String)>) {
         let stat = fs::read_to_string("/proc/stat").unwrap_or_default();
         let mut total_percent = 0.0;
         let mut per_core = Vec::new();
@@ -85,8 +85,10 @@ impl CpuCollector {
         }
 
         let temperature = read_cpu_temperature();
+        let per_core_temps = read_per_core_temperatures();
+        let per_core_freqs = read_per_core_frequencies();
 
-        (total_percent, per_core, freq, temperature)
+        (total_percent, per_core, freq, temperature, per_core_temps, per_core_freqs)
     }
 }
 
@@ -143,4 +145,66 @@ pub fn uptime_secs() -> u64 {
         .and_then(|s| s.parse::<f64>().ok())
         .map(|f| f as u64)
         .unwrap_or(0)
+}
+
+fn read_per_core_temperatures() -> Vec<f64> {
+    let mut temps = Vec::new();
+
+    // Try hwmon: look for coretemp (Intel) or k10temp (AMD)
+    if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = fs::read_to_string(path.join("name")).unwrap_or_default();
+            let name = name.trim();
+
+            if name == "coretemp" {
+                // Intel: temp1 is package, temp2+ are per-core
+                for i in 2..=64 {
+                    let temp_file = format!("temp{}_input", i);
+                    if let Ok(temp_str) = fs::read_to_string(path.join(&temp_file)) {
+                        if let Ok(millideg) = temp_str.trim().parse::<f64>() {
+                            temps.push(millideg / 1000.0);
+                        }
+                    } else {
+                        break; // No more temp files
+                    }
+                }
+                return temps;
+            } else if name == "k10temp" {
+                // AMD Ryzen: typically only exposes Tctl (temp1)
+                if let Ok(temp_str) = fs::read_to_string(path.join("temp1_input")) {
+                    if let Ok(millideg) = temp_str.trim().parse::<f64>() {
+                        temps.push(millideg / 1000.0);
+                    }
+                }
+                return temps;
+            }
+        }
+    }
+
+    temps
+}
+
+fn read_per_core_frequencies() -> Vec<(f64, String)> {
+    let mut freqs = Vec::new();
+
+    // Iterate through cpu0, cpu1, cpu2, etc.
+    for i in 0..256 {
+        let freq_path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", i);
+        let governor_path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", i);
+
+        let freq = match fs::read_to_string(&freq_path) {
+            Ok(f) => f.trim().parse::<f64>().unwrap_or(0.0) / 1000.0, // kHz -> MHz
+            Err(_) => break, // No more CPU cores
+        };
+
+        let governor = fs::read_to_string(&governor_path)
+            .unwrap_or_else(|_| "unknown".to_string())
+            .trim()
+            .to_string();
+
+        freqs.push((freq, governor));
+    }
+
+    freqs
 }

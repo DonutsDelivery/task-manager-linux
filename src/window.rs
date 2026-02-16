@@ -251,8 +251,10 @@ impl MainWindow {
                     (snapshot.memory.used as f64 / snapshot.memory.total as f64) * 100.0
                 } else { 0.0 };
                 status_memory_clone.set_text(&format!("Memory: {}", util::format_percent(mem_pct)));
-                if snapshot.gpu.available {
-                    status_gpu_clone.set_text(&format!("GPU: {}", util::format_percent(snapshot.gpu.utilization_percent)));
+                if let Some(gpu) = snapshot.gpu.first() {
+                    if gpu.available {
+                        status_gpu_clone.set_text(&format!("GPU: {}", util::format_percent(gpu.utilization_percent)));
+                    }
                 }
             }
 

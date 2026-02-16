@@ -49,7 +49,7 @@ impl Collector {
         thread::sleep(Duration::from_millis(500));
 
         loop {
-            let (cpu_total, cpu_per_core, cpu_freq, cpu_temp) = cpu_collector.collect();
+            let (cpu_total, cpu_per_core, cpu_freq, cpu_temp, cpu_per_core_temps, cpu_per_core_freqs) = cpu_collector.collect();
             let memory = memory_collector.collect();
             let disk = disk_collector.collect();
             let network = network_collector.collect();
@@ -93,6 +93,8 @@ impl Collector {
                     frequency_mhz: cpu_freq,
                     uptime_secs: cpu::uptime_secs(),
                     temperature_celsius: cpu_temp,
+                    per_core_temperatures: cpu_per_core_temps,
+                    per_core_frequencies: cpu_per_core_freqs,
                 },
                 memory,
                 disk,

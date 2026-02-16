@@ -45,10 +45,13 @@ enum GpuBackend {
     None,
 }
 
-/// Scan /sys/class/drm/card* for a card whose device/vendor matches `vendor_id`.
-/// Returns (card_path, device_path) for the first match.
-fn find_drm_card_by_vendor(vendor_id: &str) -> Option<(String, String)> {
-    let drm_dir = std::fs::read_dir("/sys/class/drm").ok()?;
+/// Scan /sys/class/drm/card* for all cards whose device/vendor matches `vendor_id`.
+/// Returns Vec of (card_path, device_path) for all matches.
+fn find_drm_cards_by_vendor(vendor_id: &str) -> Vec<(String, String)> {
+    let drm_dir = match std::fs::read_dir("/sys/class/drm") {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
     let mut cards: Vec<_> = drm_dir
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -58,20 +61,21 @@ fn find_drm_card_by_vendor(vendor_id: &str) -> Option<(String, String)> {
             name.starts_with("card") && name[4..].chars().all(|c| c.is_ascii_digit())
         })
         .collect();
-    // Sort so we check card0 first
+    // Sort so we check card0, card1, ... in order
     cards.sort_by_key(|e| e.file_name());
 
+    let mut result = Vec::new();
     for entry in cards {
         let card_path = entry.path().to_string_lossy().to_string();
         let device_path = format!("{}/device", card_path);
         let vendor_path = format!("{}/vendor", device_path);
         if let Some(vendor) = read_sysfs_string(&vendor_path) {
             if vendor == vendor_id {
-                return Some((card_path, device_path));
+                result.push((card_path, device_path));
             }
         }
     }
-    None
+    result
 }
 
 fn detect_amd_gpu_name(device_path: &str, hwmon_path: &Option<String>) -> String {
@@ -108,41 +112,46 @@ fn detect_intel_gpu_name(card_path: &str, device_path: &str) -> String {
     "Intel GPU".to_string()
 }
 
-fn detect_backend() -> GpuBackend {
-    // 1) Try NVIDIA via NVML
+fn detect_backends() -> Vec<GpuBackend> {
+    let mut backends = Vec::new();
+
+    // 1) Try NVIDIA via NVML (can have multiple NVIDIA GPUs)
     if let Ok(nvml) = Nvml::init() {
         log::info!("NVML initialized successfully");
-        return GpuBackend::Nvidia(nvml);
+        backends.push(GpuBackend::Nvidia(nvml));
     }
 
-    // 2) Try AMD (vendor 0x1002)
-    if let Some((card_path, device_path)) = find_drm_card_by_vendor("0x1002") {
+    // 2) Scan ALL AMD cards (vendor 0x1002)
+    for (card_path, device_path) in find_drm_cards_by_vendor("0x1002") {
         let hwmon_path = find_hwmon_path(&device_path);
         let name = detect_amd_gpu_name(&device_path, &hwmon_path);
         log::info!("AMD GPU detected via sysfs: {} ({})", name, card_path);
-        return GpuBackend::Amd {
+        backends.push(GpuBackend::Amd {
             card_path,
             device_path,
             hwmon_path,
             name,
-        };
+        });
     }
 
-    // 3) Try Intel (vendor 0x8086)
-    if let Some((card_path, device_path)) = find_drm_card_by_vendor("0x8086") {
+    // 3) Scan ALL Intel cards (vendor 0x8086)
+    for (card_path, device_path) in find_drm_cards_by_vendor("0x8086") {
         let hwmon_path = find_hwmon_path(&device_path);
         let name = detect_intel_gpu_name(&card_path, &device_path);
         log::info!("Intel GPU detected via sysfs: {} ({})", name, card_path);
-        return GpuBackend::Intel {
+        backends.push(GpuBackend::Intel {
             card_path,
             device_path,
             hwmon_path,
             name,
-        };
+        });
     }
 
-    log::warn!("No GPU detected - GPU monitoring disabled");
-    GpuBackend::None
+    if backends.is_empty() {
+        log::warn!("No GPU detected - GPU monitoring disabled");
+    }
+
+    backends
 }
 
 // ---------------------------------------------------------------------------
@@ -150,49 +159,77 @@ fn detect_backend() -> GpuBackend {
 // ---------------------------------------------------------------------------
 
 pub struct GpuCollector {
-    backend: GpuBackend,
+    backends: Vec<GpuBackend>,
 }
 
 impl GpuCollector {
     pub fn new() -> Self {
         Self {
-            backend: detect_backend(),
+            backends: detect_backends(),
         }
     }
 
-    pub fn collect_system(&self) -> GpuInfo {
-        match &self.backend {
-            GpuBackend::Nvidia(nvml) => self.collect_nvidia(nvml),
-            GpuBackend::Amd {
-                card_path: _,
-                device_path,
-                hwmon_path,
-                name,
-            } => Self::collect_amd(device_path, hwmon_path, name),
-            GpuBackend::Intel {
-                card_path,
-                device_path: _,
-                hwmon_path,
-                name,
-            } => Self::collect_intel(card_path, hwmon_path, name),
-            GpuBackend::None => GpuInfo::default(),
+    pub fn collect_system(&self) -> Vec<GpuInfo> {
+        let mut gpu_infos = Vec::new();
+
+        for backend in &self.backends {
+            match backend {
+                GpuBackend::Nvidia(nvml) => {
+                    // NVML can have multiple NVIDIA devices
+                    if let Ok(device_count) = nvml.device_count() {
+                        for index in 0..device_count {
+                            gpu_infos.push(self.collect_nvidia(nvml, index));
+                        }
+                    }
+                }
+                GpuBackend::Amd {
+                    card_path: _,
+                    device_path,
+                    hwmon_path,
+                    name,
+                } => {
+                    gpu_infos.push(Self::collect_amd(device_path, hwmon_path, name));
+                }
+                GpuBackend::Intel {
+                    card_path,
+                    device_path: _,
+                    hwmon_path,
+                    name,
+                } => {
+                    gpu_infos.push(Self::collect_intel(card_path, hwmon_path, name));
+                }
+                GpuBackend::None => {
+                    // Skip None backends
+                }
+            }
         }
+
+        gpu_infos
     }
 
     pub fn collect_per_process(&self) -> HashMap<u32, u64> {
-        match &self.backend {
-            GpuBackend::Nvidia(nvml) => self.collect_per_process_nvidia(nvml),
-            // Per-process VRAM tracking not available via sysfs for AMD/Intel
-            _ => HashMap::new(),
+        let mut map = HashMap::new();
+
+        // Aggregate across all NVIDIA GPUs
+        for backend in &self.backends {
+            if let GpuBackend::Nvidia(nvml) = backend {
+                let per_process = self.collect_per_process_nvidia(nvml);
+                for (pid, vram) in per_process {
+                    *map.entry(pid).or_insert(0) += vram;
+                }
+            }
         }
+        // Per-process VRAM tracking not available via sysfs for AMD/Intel
+
+        map
     }
 
     // ------------------------------------------------------------------
     // NVIDIA (NVML)
     // ------------------------------------------------------------------
 
-    fn collect_nvidia(&self, nvml: &Nvml) -> GpuInfo {
-        let device = match nvml.device_by_index(0) {
+    fn collect_nvidia(&self, nvml: &Nvml, index: u32) -> GpuInfo {
+        let device = match nvml.device_by_index(index) {
             Ok(d) => d,
             Err(_) => return GpuInfo::default(),
         };
@@ -222,27 +259,33 @@ impl GpuCollector {
 
     fn collect_per_process_nvidia(&self, nvml: &Nvml) -> HashMap<u32, u64> {
         let mut map = HashMap::new();
-        let device = match nvml.device_by_index(0) {
-            Ok(d) => d,
-            Err(_) => return map,
-        };
 
-        if let Ok(procs) = device.running_compute_processes() {
-            for p in procs {
-                let mem = match p.used_gpu_memory {
-                    UsedGpuMemory::Used(bytes) => bytes,
-                    UsedGpuMemory::Unavailable => 0,
+        // Iterate over all NVIDIA devices
+        if let Ok(device_count) = nvml.device_count() {
+            for index in 0..device_count {
+                let device = match nvml.device_by_index(index) {
+                    Ok(d) => d,
+                    Err(_) => continue,
                 };
-                *map.entry(p.pid).or_insert(0) += mem;
-            }
-        }
-        if let Ok(procs) = device.running_graphics_processes() {
-            for p in procs {
-                let mem = match p.used_gpu_memory {
-                    UsedGpuMemory::Used(bytes) => bytes,
-                    UsedGpuMemory::Unavailable => 0,
-                };
-                *map.entry(p.pid).or_insert(0) += mem;
+
+                if let Ok(procs) = device.running_compute_processes() {
+                    for p in procs {
+                        let mem = match p.used_gpu_memory {
+                            UsedGpuMemory::Used(bytes) => bytes,
+                            UsedGpuMemory::Unavailable => 0,
+                        };
+                        *map.entry(p.pid).or_insert(0) += mem;
+                    }
+                }
+                if let Ok(procs) = device.running_graphics_processes() {
+                    for p in procs {
+                        let mem = match p.used_gpu_memory {
+                            UsedGpuMemory::Used(bytes) => bytes,
+                            UsedGpuMemory::Unavailable => 0,
+                        };
+                        *map.entry(p.pid).or_insert(0) += mem;
+                    }
+                }
             }
         }
 

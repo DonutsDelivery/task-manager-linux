@@ -15,6 +15,8 @@ pub mod users;
 pub mod battery;
 pub mod history;
 pub mod net_per_process;
+pub mod psi;
+pub mod export;
 
 pub use collector::Collector;
 pub use desktop_resolver::DesktopResolver;

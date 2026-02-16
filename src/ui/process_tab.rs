@@ -6,6 +6,8 @@ use gtk::subclass::prelude::ObjectSubclassIsExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 
 use crate::model::{AppGroup, SystemSnapshot};
 use crate::util;
@@ -153,6 +155,19 @@ impl ProcessTab {
     pub fn new() -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.add_css_class("process-view");
+
+        // Add CSS provider for resource level colors
+        let css_provider = gtk::CssProvider::new();
+        css_provider.load_from_string(
+            ".resource-medium { color: @warning_color; }
+             .resource-high { color: orange; }
+             .resource-critical { color: @error_color; font-weight: bold; }"
+        );
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &css_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
 
         // Search bar
         let search_entry = gtk::SearchEntry::new();
@@ -306,7 +321,23 @@ impl ProcessTab {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
-            label.set_text(&util::format_percent(obj.cpu_percent()));
+            let cpu = obj.cpu_percent();
+            label.set_text(&util::format_percent(cpu));
+
+            // Remove previous level classes
+            label.remove_css_class("resource-low");
+            label.remove_css_class("resource-medium");
+            label.remove_css_class("resource-high");
+            label.remove_css_class("resource-critical");
+
+            // Add class based on CPU usage
+            if cpu > 90.0 {
+                label.add_css_class("resource-critical");
+            } else if cpu > 50.0 {
+                label.add_css_class("resource-high");
+            } else if cpu > 20.0 {
+                label.add_css_class("resource-medium");
+            }
         });
         let cpu_col = gtk::ColumnViewColumn::new(Some("CPU"), Some(cpu_factory));
         cpu_col.set_fixed_width(80);
@@ -331,7 +362,28 @@ impl ProcessTab {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
-            label.set_text(&util::format_bytes(obj.memory_bytes()));
+            let memory_bytes = obj.memory_bytes();
+            label.set_text(&util::format_bytes(memory_bytes));
+
+            // Calculate memory percentage (assume 16GB system total for coloring)
+            // This is approximate - ideally should get from SystemSnapshot
+            let total_memory_bytes = 16u64 * 1024 * 1024 * 1024; // 16GB
+            let memory_percent = (memory_bytes as f64 / total_memory_bytes as f64) * 100.0;
+
+            // Remove previous level classes
+            label.remove_css_class("resource-low");
+            label.remove_css_class("resource-medium");
+            label.remove_css_class("resource-high");
+            label.remove_css_class("resource-critical");
+
+            // Add class based on memory usage
+            if memory_percent > 6.25 { // > 1GB
+                label.add_css_class("resource-critical");
+            } else if memory_percent > 3.125 { // > 512MB
+                label.add_css_class("resource-high");
+            } else if memory_percent > 1.25 { // > 200MB
+                label.add_css_class("resource-medium");
+            }
         });
         let mem_col = gtk::ColumnViewColumn::new(Some("Memory"), Some(mem_factory));
         mem_col.set_fixed_width(100);
@@ -537,6 +589,16 @@ impl ProcessTab {
         nice_menu.append(Some("Very Low (19)"), Some("process.nice-19"));
         menu.append_submenu(Some("Set Priority"), &nice_menu);
 
+        // Create "Send Signal" submenu
+        let signal_menu = gio::Menu::new();
+        signal_menu.append(Some("SIGSTOP (Pause)"), Some("process.signal-stop"));
+        signal_menu.append(Some("SIGCONT (Resume)"), Some("process.signal-cont"));
+        signal_menu.append(Some("SIGHUP (Hangup)"), Some("process.signal-hup"));
+        signal_menu.append(Some("SIGINT (Interrupt)"), Some("process.signal-int"));
+        signal_menu.append(Some("SIGUSR1"), Some("process.signal-usr1"));
+        signal_menu.append(Some("SIGUSR2"), Some("process.signal-usr2"));
+        menu.append_submenu(Some("Send Signal"), &signal_menu);
+
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_parent(&column_view);
         popover.set_has_arrow(false);
@@ -586,6 +648,28 @@ impl ProcessTab {
             action.connect_activate(move |_, _| {
                 if let Some(obj) = selected_process(&sel_c) {
                     set_priority(obj.pid(), obj.display_name(), value, &cv_c);
+                }
+            });
+            action_group.add_action(&action);
+        }
+
+        // Signal actions
+        let signal_actions = [
+            ("stop", Signal::SIGSTOP),
+            ("cont", Signal::SIGCONT),
+            ("hup", Signal::SIGHUP),
+            ("int", Signal::SIGINT),
+            ("usr1", Signal::SIGUSR1),
+            ("usr2", Signal::SIGUSR2),
+        ];
+
+        for (name, sig) in signal_actions {
+            let sel_c = selection.clone();
+            let cv_c = column_view.clone();
+            let action = gio::SimpleAction::new(&format!("signal-{}", name), None);
+            action.connect_activate(move |_, _| {
+                if let Some(obj) = selected_process(&sel_c) {
+                    send_signal(obj.pid(), obj.display_name(), sig, &cv_c);
                 }
             });
             action_group.add_action(&action);
@@ -843,7 +927,37 @@ fn set_priority(pid: i32, name: String, nice: i32, widget: &gtk::ColumnView) {
     }
 }
 
-fn show_confirm_dialog(widget: &gtk::ColumnView, message: &str, pid: i32, signal: nix::sys::signal::Signal) {
+fn send_signal(pid: i32, name: String, sig: Signal, widget: &gtk::ColumnView) {
+    if is_critical_process(pid) {
+        let msg = format!(
+            "\"{}\" (PID {}) is a critical system process.\n\nSending signal {:?} may crash your system.\n\nAre you sure?",
+            name, pid, sig
+        );
+        show_confirm_dialog(widget, &msg, pid, sig);
+        return;
+    }
+
+    do_signal(pid, &name, sig, widget);
+}
+
+fn do_signal(pid: i32, name: &str, sig: Signal, widget: &gtk::ColumnView) {
+    match signal::kill(Pid::from_raw(pid), sig) {
+        Ok(_) => log::info!("Sent {:?} to PID {} ({})", sig, pid, name),
+        Err(e) => {
+            log::error!("Failed to send {:?} to PID {} ({}): {}", sig, pid, name, e);
+            let msg = format!(
+                "Failed to send signal {:?} to \"{}\" (PID {})\n\n{}\n\nTry launching Task Manager with elevated privileges.",
+                sig,
+                name,
+                pid,
+                e
+            );
+            show_error_dialog(widget, &msg);
+        }
+    }
+}
+
+fn show_confirm_dialog(widget: &gtk::ColumnView, message: &str, pid: i32, signal: Signal) {
     let window = widget.root()
         .and_then(|r| r.downcast::<gtk::Window>().ok());
     let widget_clone = widget.clone();
@@ -856,8 +970,15 @@ fn show_confirm_dialog(widget: &gtk::ColumnView, message: &str, pid: i32, signal
         message,
     );
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    let kill_btn = dialog.add_button("Kill Anyway", gtk::ResponseType::Accept);
-    kill_btn.add_css_class("destructive-action");
+
+    // Choose button label based on signal type
+    let button_label = if signal == Signal::SIGKILL || signal == Signal::SIGTERM {
+        "Kill Anyway"
+    } else {
+        "Send Anyway"
+    };
+    let action_btn = dialog.add_button(button_label, gtk::ResponseType::Accept);
+    action_btn.add_css_class("destructive-action");
 
     let name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
         .unwrap_or_else(|_| "unknown".to_string())
@@ -866,7 +987,11 @@ fn show_confirm_dialog(widget: &gtk::ColumnView, message: &str, pid: i32, signal
 
     dialog.connect_response(move |d, response| {
         if response == gtk::ResponseType::Accept {
-            do_kill(pid, &name, signal, &widget_clone);
+            if signal == Signal::SIGKILL || signal == Signal::SIGTERM {
+                do_kill(pid, &name, signal, &widget_clone);
+            } else {
+                do_signal(pid, &name, signal, &widget_clone);
+            }
         }
         d.close();
     });
