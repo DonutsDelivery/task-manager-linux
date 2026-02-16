@@ -146,6 +146,8 @@ pub struct ProcessTab {
     store: gio::ListStore,
     search_entry: gtk::SearchEntry,
     column_view: gtk::ColumnView,
+    sort_model: gtk::SortListModel,
+    scroll: gtk::ScrolledWindow,
     // Cache for group children data
     children_cache: Rc<RefCell<HashMap<i32, Vec<crate::model::ProcessInfo>>>>,
     child_stores: Rc<RefCell<HashMap<i32, gio::ListStore>>>,
@@ -570,6 +572,7 @@ impl ProcessTab {
             .child(&column_view)
             .build();
         widget.append(&scroll);
+        let scroll_ref = scroll.clone();
 
         // Context menu
         let children_cache: Rc<RefCell<HashMap<i32, Vec<crate::model::ProcessInfo>>>> =
@@ -776,6 +779,8 @@ impl ProcessTab {
             store,
             search_entry,
             column_view,
+            sort_model,
+            scroll: scroll_ref,
             children_cache,
             child_stores,
         }
@@ -855,8 +860,20 @@ impl ProcessTab {
             self.store.splice(new_count as u32, (old_count - new_count) as u32, &[] as &[ProcessObject]);
         }
 
+        // Save scroll position before triggering re-sort
+        let vadj = self.scroll.vadjustment();
+        let scroll_pos = vadj.value();
+
         // Notify the sort/filter/tree model that items changed
         self.store.items_changed(0, 0, 0);
+
+        // Trigger re-sort so columns reflect updated values
+        if let Some(sorter) = self.sort_model.sorter() {
+            sorter.changed(gtk::SorterChange::Different);
+        }
+
+        // Restore scroll position
+        vadj.set_value(scroll_pos);
     }
 }
 
