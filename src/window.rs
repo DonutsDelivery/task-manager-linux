@@ -165,7 +165,6 @@ impl MainWindow {
             header.pack_end(&menu_button);
 
             // Register actions for each restart command
-            let action_group = gtk::gio::SimpleActionGroup::new();
             for (i, cmd) in de.commands.iter().enumerate() {
                 let action = gtk::gio::SimpleAction::new(&format!("de-restart-{}", i), None);
                 let label = cmd.label.clone();
@@ -180,9 +179,8 @@ impl MainWindow {
                     };
                     show_restart_dialog(&window_ref, &cmd);
                 });
-                action_group.add_action(&action);
+                window.add_action(&action);
             }
-            window.insert_action_group("win", Some(&action_group));
         }
 
         // Primary menu (hamburger)

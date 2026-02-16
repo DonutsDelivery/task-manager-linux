@@ -23,6 +23,9 @@ mod imp {
         pub comment: RefCell<String>,
         pub file_path: RefCell<String>,
         pub icon: RefCell<String>,
+        pub launch_minimized: RefCell<bool>,
+        pub wm_class: RefCell<String>,
+        pub active_state: RefCell<String>,
     }
 
     #[glib::object_subclass]
@@ -53,6 +56,9 @@ impl StartupObject {
         *imp.comment.borrow_mut() = entry.comment.clone();
         *imp.file_path.borrow_mut() = entry.file_path.clone();
         *imp.icon.borrow_mut() = entry.icon.clone();
+        *imp.launch_minimized.borrow_mut() = entry.launch_minimized;
+        *imp.wm_class.borrow_mut() = entry.wm_class.clone();
+        *imp.active_state.borrow_mut() = entry.active_state.clone();
     }
 
     pub fn name(&self) -> String {
@@ -73,6 +79,15 @@ impl StartupObject {
     pub fn file_path(&self) -> String {
         self.imp().file_path.borrow().clone()
     }
+    pub fn launch_minimized(&self) -> bool {
+        *self.imp().launch_minimized.borrow()
+    }
+    pub fn wm_class(&self) -> String {
+        self.imp().wm_class.borrow().clone()
+    }
+    pub fn active_state(&self) -> String {
+        self.imp().active_state.borrow().clone()
+    }
 
     pub fn to_startup_entry(&self) -> StartupEntry {
         let imp = self.imp();
@@ -82,17 +97,28 @@ impl StartupObject {
             exec: imp.exec.borrow().clone(),
             icon: imp.icon.borrow().clone(),
             enabled: *imp.enabled.borrow(),
+            launch_minimized: *imp.launch_minimized.borrow(),
+            wm_class: imp.wm_class.borrow().clone(),
             file_path: imp.file_path.borrow().clone(),
             source: if *imp.source.borrow() == "Systemd" {
                 StartupSource::SystemdUser
             } else {
                 StartupSource::Autostart
             },
+            active_state: imp.active_state.borrow().clone(),
         }
     }
 
     pub fn set_enabled(&self, enabled: bool) {
         *self.imp().enabled.borrow_mut() = enabled;
+    }
+
+    pub fn set_launch_minimized(&self, minimized: bool) {
+        *self.imp().launch_minimized.borrow_mut() = minimized;
+    }
+
+    pub fn set_active_state(&self, state: &str) {
+        *self.imp().active_state.borrow_mut() = state.to_string();
     }
 }
 
@@ -249,10 +275,110 @@ impl StartupTab {
                 item.set_child(Some(&new_switch));
             }
         });
-        let status_col = gtk::ColumnViewColumn::new(Some("Status"), Some(status_factory));
+        let status_col = gtk::ColumnViewColumn::new(Some("Enable"), Some(status_factory));
         status_col.set_fixed_width(80);
         status_col.set_resizable(false);
         column_view.append_column(&status_col);
+
+        // Launch mode column (Normal / Background)
+        let launch_factory = gtk::SignalListItemFactory::new();
+        launch_factory.connect_setup(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let dropdown = gtk::DropDown::from_strings(&["Normal", "Background"]);
+            dropdown.set_halign(gtk::Align::Center);
+            dropdown.set_valign(gtk::Align::Center);
+            dropdown.set_hexpand(false);
+            item.set_child(Some(&dropdown));
+        });
+        launch_factory.connect_bind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let obj = item.item().and_downcast::<StartupObject>().unwrap();
+            let dropdown = item.child().and_downcast::<gtk::DropDown>().unwrap();
+
+            // Set initial state
+            dropdown.set_selected(if obj.launch_minimized() { 1 } else { 0 });
+
+            // Systemd services are always background — disable dropdown
+            if obj.source() == "Systemd" {
+                dropdown.set_selected(1);
+                dropdown.set_sensitive(false);
+            } else {
+                dropdown.set_sensitive(true);
+            }
+
+            let obj_clone = obj.clone();
+            dropdown.connect_selected_notify(move |dd| {
+                let minimized = dd.selected() == 1;
+                if minimized == obj_clone.launch_minimized() {
+                    return; // No change
+                }
+                obj_clone.set_launch_minimized(minimized);
+                let entry = obj_clone.to_startup_entry();
+                std::thread::spawn(move || {
+                    if let Err(e) = StartupCollector::toggle_launch_mode(&entry, minimized) {
+                        log::error!("Failed to toggle launch mode for '{}': {}", entry.name, e);
+                    }
+                });
+            });
+        });
+        launch_factory.connect_unbind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            // Replace dropdown to drop old signal connections
+            let dropdown = gtk::DropDown::from_strings(&["Normal", "Background"]);
+            dropdown.set_halign(gtk::Align::Center);
+            dropdown.set_valign(gtk::Align::Center);
+            dropdown.set_hexpand(false);
+            item.set_child(Some(&dropdown));
+        });
+        let launch_col = gtk::ColumnViewColumn::new(Some("Launch"), Some(launch_factory));
+        launch_col.set_fixed_width(120);
+        launch_col.set_resizable(false);
+        column_view.append_column(&launch_col);
+
+        // Running column (for systemd services — shows active state)
+        let running_factory = gtk::SignalListItemFactory::new();
+        running_factory.connect_setup(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let label = gtk::Label::new(None);
+            label.set_halign(gtk::Align::Center);
+            item.set_child(Some(&label));
+        });
+        running_factory.connect_bind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let obj = item.item().and_downcast::<StartupObject>().unwrap();
+            let label = item.child().and_downcast::<gtk::Label>().unwrap();
+
+            label.remove_css_class("success");
+            label.remove_css_class("error");
+            label.remove_css_class("dim-label");
+
+            let state = obj.active_state();
+            if obj.source() == "Systemd" {
+                label.set_text(&state);
+                if state == "active" {
+                    label.add_css_class("success");
+                } else if state == "failed" {
+                    label.add_css_class("error");
+                } else {
+                    label.add_css_class("dim-label");
+                }
+            } else {
+                label.set_text("—");
+                label.add_css_class("dim-label");
+            }
+        });
+        running_factory.connect_unbind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            if let Some(label) = item.child().and_downcast::<gtk::Label>() {
+                label.remove_css_class("success");
+                label.remove_css_class("error");
+                label.remove_css_class("dim-label");
+            }
+        });
+        let running_col = gtk::ColumnViewColumn::new(Some("Running"), Some(running_factory));
+        running_col.set_fixed_width(80);
+        running_col.set_resizable(false);
+        column_view.append_column(&running_col);
 
         // Type column
         let type_factory = gtk::SignalListItemFactory::new();
@@ -318,6 +444,90 @@ impl StartupTab {
             .child(&column_view)
             .build();
         widget.append(&scroll);
+
+        // --- Context menu for systemd service actions ---
+        let menu = gio::Menu::new();
+        menu.append(Some("Start"), Some("startup.start"));
+        menu.append(Some("Stop"), Some("startup.stop"));
+        menu.append(Some("Restart"), Some("startup.restart"));
+
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&column_view);
+        popover.set_has_arrow(false);
+
+        let action_group = gio::SimpleActionGroup::new();
+
+        // Helper to create service action
+        fn make_action(
+            action_name: &str,
+            systemctl_action: &'static str,
+            selection: &gtk::SingleSelection,
+        ) -> gio::SimpleAction {
+            let action = gio::SimpleAction::new(action_name, None);
+            let sel = selection.clone();
+            action.connect_activate(move |_, _| {
+                let Some(obj) = sel
+                    .selected_item()
+                    .and_then(|i| i.downcast::<StartupObject>().ok())
+                else {
+                    return;
+                };
+                // Only for systemd services
+                if obj.source() != "Systemd" {
+                    return;
+                }
+                let entry = obj.to_startup_entry();
+                std::thread::spawn(move || {
+                    match StartupCollector::service_action(&entry, systemctl_action) {
+                        Ok(()) => {
+                            log::info!(
+                                "Service action '{}' on '{}' succeeded",
+                                systemctl_action,
+                                entry.name
+                            );
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Service action '{}' on '{}' failed: {}",
+                                systemctl_action,
+                                entry.name,
+                                e
+                            );
+                        }
+                    }
+                });
+            });
+            action
+        }
+
+        action_group.add_action(&make_action("start", "start", &selection));
+        action_group.add_action(&make_action("stop", "stop", &selection));
+        action_group.add_action(&make_action("restart", "restart", &selection));
+
+        column_view.insert_action_group("startup", Some(&action_group));
+
+        // Right-click gesture — only show menu for systemd services
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3);
+        let popover_clone = popover.clone();
+        let sel_clone = selection.clone();
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            // Only show context menu for systemd services
+            let is_systemd = sel_clone
+                .selected_item()
+                .and_then(|i| i.downcast::<StartupObject>().ok())
+                .map(|obj| obj.source() == "Systemd")
+                .unwrap_or(false);
+            if !is_systemd {
+                return;
+            }
+            popover_clone.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+                x as i32, y as i32, 1, 1,
+            )));
+            popover_clone.popup();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+        column_view.add_controller(gesture);
 
         // Keyboard shortcut: Ctrl+F to focus search
         let key_controller = gtk::EventControllerKey::new();

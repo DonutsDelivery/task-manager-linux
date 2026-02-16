@@ -5,8 +5,12 @@ pub struct StartupEntry {
     pub exec: String,
     pub icon: String,
     pub enabled: bool,
+    pub launch_minimized: bool,
+    pub wm_class: String,
     pub file_path: String,
     pub source: StartupSource,
+    /// For systemd services: "active", "inactive", "failed"; empty for autostart entries
+    pub active_state: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

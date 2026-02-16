@@ -122,6 +122,23 @@ impl ProcessObject {
     pub fn command(&self) -> String { self.imp().command.borrow().clone() }
 }
 
+/// Helper to unwrap TreeListRow → ProcessObject from a ListItem
+fn get_process_obj(item: &gtk::ListItem) -> ProcessObject {
+    item.item()
+        .and_then(|i| i.downcast::<gtk::TreeListRow>().ok())
+        .and_then(|row| row.item())
+        .and_then(|i| i.downcast::<ProcessObject>().ok())
+        .unwrap()
+}
+
+/// Helper to get ProcessObject from selection (with TreeListRow unwrapping)
+fn selected_process(sel: &gtk::SingleSelection) -> Option<ProcessObject> {
+    sel.selected_item()
+        .and_then(|i| i.downcast::<gtk::TreeListRow>().ok())
+        .and_then(|row| row.item())
+        .and_then(|i| i.downcast::<ProcessObject>().ok())
+}
+
 pub struct ProcessTab {
     pub widget: gtk::Box,
     store: gio::ListStore,
@@ -129,6 +146,7 @@ pub struct ProcessTab {
     column_view: gtk::ColumnView,
     // Cache for group children data
     children_cache: Rc<RefCell<HashMap<i32, Vec<crate::model::ProcessInfo>>>>,
+    child_stores: Rc<RefCell<HashMap<i32, gio::ListStore>>>,
 }
 
 impl ProcessTab {
@@ -145,7 +163,28 @@ impl ProcessTab {
         // List store for process objects
         let store = gio::ListStore::new::<ProcessObject>();
 
-        // Filter model for search
+        // Child stores for tree expansion
+        let child_stores: Rc<RefCell<HashMap<i32, gio::ListStore>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+
+        // TreeListModel wrapping the root store
+        let child_stores_for_tree = child_stores.clone();
+        let tree_model = gtk::TreeListModel::new(
+            store.clone(),
+            false, // passthrough
+            false, // autoexpand
+            move |obj| {
+                let proc_obj = obj.downcast_ref::<ProcessObject>()?;
+                if proc_obj.is_group() && proc_obj.child_count() > 0 {
+                    let stores = child_stores_for_tree.borrow();
+                    stores.get(&proc_obj.pid()).map(|s| s.clone().upcast::<gio::ListModel>())
+                } else {
+                    None
+                }
+            },
+        );
+
+        // Filter model for search (operates on TreeListRow items)
         let filter = gtk::CustomFilter::new(glib::clone!(
             #[weak] search_entry,
             #[upgrade_or] false,
@@ -154,30 +193,26 @@ impl ProcessTab {
                 if text.is_empty() {
                     return true;
                 }
-                let proc_obj = obj.downcast_ref::<ProcessObject>().unwrap();
-                let name = proc_obj.display_name().to_lowercase();
-                let pid = proc_obj.pid().to_string();
-                let path = proc_obj.exe_path().to_lowercase();
-                name.contains(&text) || pid.contains(&text) || path.contains(&text)
+                if let Some(row) = obj.downcast_ref::<gtk::TreeListRow>() {
+                    if let Some(proc_obj) = row.item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+                        let name = proc_obj.display_name().to_lowercase();
+                        let pid = proc_obj.pid().to_string();
+                        let path = proc_obj.exe_path().to_lowercase();
+                        return name.contains(&text) || pid.contains(&text) || path.contains(&text);
+                    }
+                }
+                true
             }
         ));
-        let filter_model = gtk::FilterListModel::new(Some(store.clone()), Some(filter.clone()));
+        let filter_model = gtk::FilterListModel::new(Some(tree_model), Some(filter.clone()));
 
         // Re-filter on search text change
         search_entry.connect_search_changed(move |_| {
             filter.changed(gtk::FilterChange::Different);
         });
 
-        // Sort model
-        let sorter = gtk::CustomSorter::new(move |a, b| {
-            let pa = a.downcast_ref::<ProcessObject>().unwrap();
-            let pb = b.downcast_ref::<ProcessObject>().unwrap();
-            pb.cpu_percent()
-                .partial_cmp(&pa.cpu_percent())
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .into()
-        });
-        let sort_model = gtk::SortListModel::new(Some(filter_model), Some(sorter.clone()));
+        // Sort model (sorter set after columns are built)
+        let sort_model = gtk::SortListModel::new(Some(filter_model), None::<gtk::Sorter>);
 
         // Selection model
         let selection = gtk::SingleSelection::new(Some(sort_model.clone()));
@@ -190,24 +225,35 @@ impl ProcessTab {
 
         // --- Columns ---
 
-        // Name column
+        // Name column (with TreeExpander for expand/collapse)
         let name_factory = gtk::SignalListItemFactory::new();
         name_factory.connect_setup(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let expander = gtk::TreeExpander::new();
             let label = gtk::Label::new(None);
             label.set_halign(gtk::Align::Start);
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            item.set_child(Some(&label));
+            expander.set_child(Some(&label));
+            item.set_child(Some(&expander));
         });
         name_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
-            let label = item.child().and_downcast::<gtk::Label>().unwrap();
+            let row = item.item().and_downcast::<gtk::TreeListRow>().unwrap();
+            let obj = row.item().and_downcast::<ProcessObject>().unwrap();
+            let expander = item.child().and_downcast::<gtk::TreeExpander>().unwrap();
+            expander.set_list_row(Some(&row));
+            let label = expander.child().and_downcast::<gtk::Label>().unwrap();
             let name = obj.display_name();
             if obj.is_group() && obj.child_count() > 0 {
                 label.set_text(&format!("{} ({})", name, obj.child_count() + 1));
             } else {
                 label.set_text(&name);
+            }
+        });
+        name_factory.connect_unbind(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            if let Some(expander) = item.child().and_downcast::<gtk::TreeExpander>() {
+                expander.set_list_row(None::<&gtk::TreeListRow>);
             }
         });
         let name_col = gtk::ColumnViewColumn::new(Some("Name"), Some(name_factory));
@@ -233,7 +279,7 @@ impl ProcessTab {
         });
         pid_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&obj.pid().to_string());
         });
@@ -258,7 +304,7 @@ impl ProcessTab {
         });
         cpu_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&util::format_percent(obj.cpu_percent()));
         });
@@ -283,7 +329,7 @@ impl ProcessTab {
         });
         mem_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&util::format_bytes(obj.memory_bytes()));
         });
@@ -308,7 +354,7 @@ impl ProcessTab {
         });
         vram_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             let vram = obj.vram_bytes();
             if vram > 0 {
@@ -338,7 +384,7 @@ impl ProcessTab {
         });
         dr_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&util::format_bytes_rate(obj.disk_read_rate()));
         });
@@ -363,7 +409,7 @@ impl ProcessTab {
         });
         dw_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&util::format_bytes_rate(obj.disk_write_rate()));
         });
@@ -388,7 +434,7 @@ impl ProcessTab {
         });
         state_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&obj.state());
         });
@@ -414,7 +460,7 @@ impl ProcessTab {
         });
         path_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             label.set_text(&obj.exe_path());
         });
@@ -439,7 +485,7 @@ impl ProcessTab {
         });
         container_factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let obj = item.item().and_downcast::<ProcessObject>().unwrap();
+            let obj = get_process_obj(item);
             let label = item.child().and_downcast::<gtk::Label>().unwrap();
             let ct = obj.container_type();
             if ct.is_empty() {
@@ -459,10 +505,10 @@ impl ProcessTab {
         container_col.set_sorter(Some(&container_sorter));
         column_view.append_column(&container_col);
 
-        // Enable sorting via the column view sorter
-        let cv_sorter = column_view.sorter();
-        if let Some(s) = cv_sorter {
-            sort_model.set_sorter(Some(&s));
+        // Enable sorting via TreeListRowSorter wrapping the column view sorter
+        if let Some(cv_sorter) = column_view.sorter() {
+            let tree_sorter = gtk::TreeListRowSorter::new(Some(cv_sorter));
+            sort_model.set_sorter(Some(&tree_sorter));
         }
 
         // Scroll window
@@ -480,6 +526,7 @@ impl ProcessTab {
         let menu = gio::Menu::new();
         menu.append(Some("End Task"), Some("process.kill-term"));
         menu.append(Some("Force Kill"), Some("process.kill-force"));
+        menu.append(Some("End Group"), Some("process.kill-group"));
         menu.append(Some("Open File Location"), Some("process.open-location"));
 
         let nice_menu = gio::Menu::new();
@@ -501,7 +548,7 @@ impl ProcessTab {
         let cv_ref = column_view.clone();
         let kill_term = gio::SimpleAction::new("kill-term", None);
         kill_term.connect_activate(move |_, _| {
-            if let Some(obj) = sel_clone.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+            if let Some(obj) = selected_process(&sel_clone) {
                 kill_process(obj.pid(), obj.display_name(), nix::sys::signal::Signal::SIGTERM, &cv_ref);
             }
         });
@@ -511,7 +558,7 @@ impl ProcessTab {
         let cv_ref2 = column_view.clone();
         let kill_force = gio::SimpleAction::new("kill-force", None);
         kill_force.connect_activate(move |_, _| {
-            if let Some(obj) = sel_clone2.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+            if let Some(obj) = selected_process(&sel_clone2) {
                 kill_process(obj.pid(), obj.display_name(), nix::sys::signal::Signal::SIGKILL, &cv_ref2);
             }
         });
@@ -520,7 +567,7 @@ impl ProcessTab {
         let sel_clone3 = selection.clone();
         let open_loc = gio::SimpleAction::new("open-location", None);
         open_loc.connect_activate(move |_, _| {
-            if let Some(obj) = sel_clone3.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+            if let Some(obj) = selected_process(&sel_clone3) {
                 let path = obj.exe_path();
                 if let Some(dir) = std::path::Path::new(&path).parent() {
                     let _ = std::process::Command::new("xdg-open")
@@ -537,12 +584,58 @@ impl ProcessTab {
             let cv_c = column_view.clone();
             let action = gio::SimpleAction::new(&format!("nice-{}", suffix), None);
             action.connect_activate(move |_, _| {
-                if let Some(obj) = sel_c.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+                if let Some(obj) = selected_process(&sel_c) {
                     set_priority(obj.pid(), obj.display_name(), value, &cv_c);
                 }
             });
             action_group.add_action(&action);
         }
+
+        // Kill Group action
+        let children_cache_for_kill = children_cache.clone();
+        let sel_for_kill_group = selection.clone();
+        let cv_for_kill_group = column_view.clone();
+        let kill_group = gio::SimpleAction::new("kill-group", None);
+        kill_group.set_enabled(false);
+        kill_group.connect_activate(move |_, _| {
+            if let Some(obj) = selected_process(&sel_for_kill_group) {
+                if obj.is_group() && obj.child_count() > 0 {
+                    let leader_pid = obj.pid();
+                    let name = obj.display_name();
+                    if is_critical_process(leader_pid) {
+                        show_error_dialog(&cv_for_kill_group,
+                            &format!("Cannot kill group \"{}\" — leader (PID {}) is a critical system process.",
+                                name, leader_pid));
+                        return;
+                    }
+                    let cache = children_cache_for_kill.borrow();
+                    if let Some(children) = cache.get(&leader_pid) {
+                        // Kill children first (reverse order), then leader
+                        for child in children.iter().rev() {
+                            let _ = nix::sys::signal::kill(
+                                nix::unistd::Pid::from_raw(child.pid),
+                                nix::sys::signal::Signal::SIGKILL,
+                            );
+                        }
+                    }
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(leader_pid),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
+                    log::info!("Killed group '{}' (leader PID {})", name, leader_pid);
+                }
+            }
+        });
+        action_group.add_action(&kill_group);
+
+        // Dynamically enable/disable kill-group based on selection
+        let kill_group_for_sel = kill_group.clone();
+        selection.connect_notify_local(Some("selected"), move |sel, _| {
+            let enabled = selected_process(sel)
+                .map(|obj| obj.is_group() && obj.child_count() > 0)
+                .unwrap_or(false);
+            kill_group_for_sel.set_enabled(enabled);
+        });
 
         column_view.insert_action_group("process", Some(&action_group));
 
@@ -569,7 +662,7 @@ impl ProcessTab {
                     glib::Propagation::Stop
                 }
                 (gtk::gdk::Key::Delete, _) => {
-                    if let Some(obj) = sel_for_keys.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+                    if let Some(obj) = selected_process(&sel_for_keys) {
                         kill_process(obj.pid(), obj.display_name(), nix::sys::signal::Signal::SIGTERM, &cv_for_keys);
                     }
                     glib::Propagation::Stop
@@ -586,7 +679,7 @@ impl ProcessTab {
         let cv_for_dbl = column_view.clone();
         dbl_gesture.connect_released(move |gesture, n_press, _, _| {
             if n_press == 2 {
-                if let Some(obj) = sel_for_dbl.selected_item().and_then(|i| i.downcast::<ProcessObject>().ok()) {
+                if let Some(obj) = selected_process(&sel_for_dbl) {
                     show_process_details(&cv_for_dbl, &obj);
                 }
                 gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -600,11 +693,12 @@ impl ProcessTab {
             search_entry,
             column_view,
             children_cache,
+            child_stores,
         }
     }
 
     pub fn update(&mut self, snapshot: &SystemSnapshot) {
-        // Update children cache
+        // 1. Update children cache (keep for kill-group)
         {
             let mut cache = self.children_cache.borrow_mut();
             cache.clear();
@@ -615,11 +709,52 @@ impl ProcessTab {
             }
         }
 
-        // Update the store efficiently
+        // 2. Populate/update child_stores BEFORE updating root store
+        //    (root store changes can trigger create_func calls)
+        {
+            let mut stores = self.child_stores.borrow_mut();
+            let mut active_pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+
+            for group in &snapshot.app_groups {
+                if group.children.is_empty() {
+                    continue;
+                }
+                active_pids.insert(group.leader.pid);
+
+                let child_store = stores.entry(group.leader.pid)
+                    .or_insert_with(|| gio::ListStore::new::<ProcessObject>());
+
+                let new_count = group.children.len();
+                let old_count = child_store.n_items() as usize;
+
+                for (i, child) in group.children.iter().enumerate() {
+                    if i < old_count {
+                        if let Some(obj) = child_store.item(i as u32).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+                            obj.set_from_process(child);
+                        }
+                    } else {
+                        let obj = ProcessObject::new();
+                        obj.set_from_process(child);
+                        child_store.append(&obj);
+                    }
+                }
+
+                if old_count > new_count {
+                    child_store.splice(new_count as u32, (old_count - new_count) as u32, &[] as &[ProcessObject]);
+                }
+
+                // Notify child store that items were updated in-place
+                child_store.items_changed(0, 0, 0);
+            }
+
+            // Remove stale child stores for groups that disappeared
+            stores.retain(|pid, _| active_pids.contains(pid));
+        }
+
+        // 3. Update root store with group leaders
         let new_count = snapshot.app_groups.len();
         let old_count = self.store.n_items() as usize;
 
-        // Reuse existing objects where possible, add/remove as needed
         for (i, group) in snapshot.app_groups.iter().enumerate() {
             if i < old_count {
                 if let Some(obj) = self.store.item(i as u32).and_then(|o| o.downcast::<ProcessObject>().ok()) {
@@ -632,12 +767,11 @@ impl ProcessTab {
             }
         }
 
-        // Remove extras
         if old_count > new_count {
             self.store.splice(new_count as u32, (old_count - new_count) as u32, &[] as &[ProcessObject]);
         }
 
-        // Notify the sort model that items changed
+        // Notify the sort/filter/tree model that items changed
         self.store.items_changed(0, 0, 0);
     }
 }

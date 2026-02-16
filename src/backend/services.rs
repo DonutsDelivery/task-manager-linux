@@ -38,28 +38,19 @@ impl ServicesCollector {
             // The UNIT field may have a leading bullet marker on some systems, strip it.
             let line = line.trim_start_matches('\u{25CF}').trim();
 
-            let mut parts = line.splitn(5, char::is_whitespace);
-            let unit = match parts.next() {
-                Some(u) => u.trim(),
-                None => continue,
-            };
-
-            // Skip non-whitespace tokens to get LOAD, ACTIVE, SUB, DESCRIPTION
-            let load_state = match skip_blanks(&mut parts) {
-                Some(s) => s,
-                None => continue,
-            };
-            let active_state = match skip_blanks(&mut parts) {
-                Some(s) => s,
-                None => continue,
-            };
-            let sub_state = match skip_blanks(&mut parts) {
-                Some(s) => s,
-                None => continue,
-            };
-            let description = match parts.next() {
-                Some(s) => s.trim().to_string(),
-                None => String::new(),
+            // Use split_whitespace to handle variable column spacing
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 4 {
+                continue;
+            }
+            let unit = fields[0];
+            let load_state = fields[1];
+            let active_state = fields[2];
+            let sub_state = fields[3];
+            let description = if fields.len() > 4 {
+                fields[4..].join(" ")
+            } else {
+                String::new()
             };
 
             // Strip .service suffix from unit name
@@ -109,17 +100,6 @@ impl ServicesCollector {
                 output.status,
                 stderr.trim()
             ))
-        }
-    }
-}
-
-/// Skip empty tokens from splitn to handle multiple spaces between columns.
-fn skip_blanks<'a>(iter: &mut impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    loop {
-        match iter.next() {
-            Some(s) if s.is_empty() => continue,
-            Some(s) => return Some(s),
-            None => return None,
         }
     }
 }
