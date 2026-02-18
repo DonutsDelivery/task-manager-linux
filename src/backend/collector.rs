@@ -116,61 +116,114 @@ impl Collector {
     }
 }
 
+fn is_kernel_thread(proc: &crate::model::ProcessInfo) -> bool {
+    // kthreadd (PID 2) and all its children are kernel threads
+    proc.pid == 2 || proc.ppid == 2 || (proc.ppid == 0 && proc.pid != 1)
+}
+
 fn build_app_groups(processes: &[crate::model::ProcessInfo]) -> Vec<AppGroup> {
-    let pid_map: HashMap<i32, &crate::model::ProcessInfo> =
-        processes.iter().map(|p| (p.pid, p)).collect();
+    let mut kernel_procs: Vec<&crate::model::ProcessInfo> = Vec::new();
+    let mut by_name: HashMap<String, Vec<&crate::model::ProcessInfo>> = HashMap::new();
 
-    let mut groups: HashMap<i32, AppGroup> = HashMap::new();
-    let mut assigned: HashMap<i32, i32> = HashMap::new(); // child_pid -> group leader pid
-
-    // Find group leaders (processes with windows, or whose parent is pid 1 or systemd)
     for proc in processes {
-        let is_leader = proc.ppid <= 1
-            || proc.ppid == proc.pid
-            || !pid_map.contains_key(&proc.ppid)
-            || !proc.display_name.is_empty() && proc.display_name != proc.name;
-
-        if is_leader && !assigned.contains_key(&proc.pid) {
-            groups.insert(proc.pid, AppGroup::new(proc.clone()));
-            assigned.insert(proc.pid, proc.pid);
-        }
-    }
-
-    // Assign children to their leaders
-    for proc in processes {
-        if assigned.contains_key(&proc.pid) {
-            continue;
-        }
-
-        // Walk up the parent chain to find a leader
-        let mut parent = proc.ppid;
-        let mut leader_pid = None;
-        let mut visited = std::collections::HashSet::new();
-        while parent > 1 && visited.insert(parent) {
-            if let Some(&lead) = assigned.get(&parent) {
-                leader_pid = Some(lead);
-                break;
-            }
-            if let Some(p) = pid_map.get(&parent) {
-                parent = p.ppid;
-            } else {
-                break;
-            }
-        }
-
-        if let Some(lead) = leader_pid {
-            assigned.insert(proc.pid, lead);
-            if let Some(group) = groups.get_mut(&lead) {
-                group.add_child(proc.clone());
-            }
+        if is_kernel_thread(proc) {
+            kernel_procs.push(proc);
         } else {
-            // No leader found, make this process its own group
-            groups.insert(proc.pid, AppGroup::new(proc.clone()));
-            assigned.insert(proc.pid, proc.pid);
+            // Group by exe path (handles Firefox/Brave/etc. with varied comm names)
+            // Fall back to process name when exe_path is empty
+            let key = if !proc.exe_path.is_empty() {
+                proc.exe_path.to_lowercase()
+            } else {
+                proc.name.to_lowercase()
+            };
+            by_name.entry(key).or_default().push(proc);
         }
     }
 
-    let mut result: Vec<AppGroup> = groups.into_values().collect();
+    let mut result: Vec<AppGroup> = Vec::new();
+
+    // Bundle all kernel threads under one "Kernel" group
+    if !kernel_procs.is_empty() {
+        let mut leader_info = crate::model::ProcessInfo {
+            pid: 0,
+            display_name: "Kernel".to_string(),
+            name: "kernel".to_string(),
+            ..Default::default()
+        };
+        // Sum up kernel thread stats for the leader
+        for kp in &kernel_procs {
+            leader_info.cpu_percent += kp.cpu_percent;
+            leader_info.memory_bytes += kp.memory_bytes;
+            leader_info.threads += 1;
+        }
+        let mut group = AppGroup::new(leader_info);
+        for kp in &kernel_procs {
+            group.add_child((*kp).clone());
+        }
+        result.push(group);
+    }
+
+    // Group userspace processes by exe path, then merge singletons by name prefix
+    let mut groups_by_key: Vec<(String, Vec<&crate::model::ProcessInfo>)> = by_name.into_iter().collect();
+
+    // Collect singleton groups (only 1 process) for prefix merging
+    let mut singletons: Vec<(String, &crate::model::ProcessInfo)> = Vec::new();
+    let mut multi: Vec<Vec<&crate::model::ProcessInfo>> = Vec::new();
+    for (key, procs) in groups_by_key.drain(..) {
+        if procs.len() == 1 {
+            singletons.push((key, procs[0]));
+        } else {
+            multi.push(procs);
+        }
+    }
+
+    // Merge singletons that share a name prefix (e.g. akonadi_*, gvfsd-*, xdg-*)
+    let mut by_prefix: HashMap<String, Vec<&crate::model::ProcessInfo>> = HashMap::new();
+    let mut no_prefix: Vec<&crate::model::ProcessInfo> = Vec::new();
+    for (_key, proc) in &singletons {
+        let name = &proc.name;
+        // Extract prefix before first _ or - (if name has one)
+        let prefix = name.find(|c: char| c == '_' || c == '-')
+            .map(|i| &name[..i]);
+        if let Some(pfx) = prefix {
+            by_prefix.entry(pfx.to_lowercase()).or_default().push(proc);
+        } else {
+            no_prefix.push(proc);
+        }
+    }
+
+    // Prefix groups with 2+ members get merged; others stay individual
+    for (_, procs) in &by_prefix {
+        if procs.len() >= 2 {
+            multi.push(procs.clone());
+        } else {
+            no_prefix.extend(procs.iter());
+        }
+    }
+    // Remaining singletons become their own group
+    for proc in &no_prefix {
+        multi.push(vec![proc]);
+    }
+
+    // Build AppGroups from all collected groups
+    for procs in &multi {
+        let leader_idx = procs.iter().enumerate()
+            .min_by_key(|(_, p)| {
+                let has_display = if p.display_name != p.name && !p.display_name.is_empty() { 0 } else { 1 };
+                (has_display, p.pid)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        let mut group = AppGroup::new(procs[leader_idx].clone());
+        for (i, proc) in procs.iter().enumerate() {
+            if i != leader_idx {
+                group.add_child((*proc).clone());
+            }
+        }
+        result.push(group);
+    }
+
     result.sort_by(|a, b| b.total_cpu.partial_cmp(&a.total_cpu).unwrap_or(std::cmp::Ordering::Equal));
     result
 }

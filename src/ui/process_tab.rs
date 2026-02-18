@@ -247,10 +247,25 @@ impl ProcessTab {
         name_factory.connect_setup(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let expander = gtk::TreeExpander::new();
+            expander.set_hide_expander(true);
+            expander.set_indent_for_icon(false);
+            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // Arrow button for expand/collapse
+            let arrow_btn = gtk::Button::new();
+            arrow_btn.set_has_frame(false);
+            arrow_btn.set_focusable(false);
+            arrow_btn.set_valign(gtk::Align::Center);
+            arrow_btn.add_css_class("flat");
+            arrow_btn.add_css_class("circular");
+            arrow_btn.add_css_class("expand-arrow");
+            let arrow_label = gtk::Label::new(None);
+            arrow_btn.set_child(Some(&arrow_label));
             let label = gtk::Label::new(None);
             label.set_halign(gtk::Align::Start);
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            expander.set_child(Some(&label));
+            hbox.append(&arrow_btn);
+            hbox.append(&label);
+            expander.set_child(Some(&hbox));
             item.set_child(Some(&expander));
         });
         name_factory.connect_bind(|_, item| {
@@ -259,11 +274,37 @@ impl ProcessTab {
             let obj = row.item().and_downcast::<ProcessObject>().unwrap();
             let expander = item.child().and_downcast::<gtk::TreeExpander>().unwrap();
             expander.set_list_row(Some(&row));
-            let label = expander.child().and_downcast::<gtk::Label>().unwrap();
+            let hbox = expander.child().and_downcast::<gtk::Box>().unwrap();
+            let arrow_btn = hbox.first_child().and_downcast::<gtk::Button>().unwrap();
+            let arrow_label = arrow_btn.child().and_downcast::<gtk::Label>().unwrap();
+            let label = arrow_btn.next_sibling().and_downcast::<gtk::Label>().unwrap();
             let name = obj.display_name();
-            if obj.is_group() && obj.child_count() > 0 {
+            let is_expandable = row.is_expandable();
+            if is_expandable {
+                arrow_btn.set_visible(true);
                 label.set_text(&format!("{} ({})", name, obj.child_count() + 1));
+                // Click arrow to toggle expansion
+                let row_for_click = row.clone();
+                arrow_btn.connect_clicked(move |_| {
+                    row_for_click.set_expanded(!row_for_click.is_expanded());
+                });
+                let update_arrow = {
+                    let arrow_label = arrow_label.clone();
+                    let row = row.clone();
+                    move || {
+                        if row.is_expanded() {
+                            arrow_label.set_text("▼");
+                        } else {
+                            arrow_label.set_text("▶");
+                        }
+                    }
+                };
+                update_arrow();
+                row.connect_notify_local(Some("expanded"), move |_row, _| {
+                    update_arrow();
+                });
             } else {
+                arrow_btn.set_visible(false);
                 label.set_text(&name);
             }
         });
@@ -831,41 +872,83 @@ impl ProcessTab {
                 if old_count > new_count {
                     child_store.splice(new_count as u32, (old_count - new_count) as u32, &[] as &[ProcessObject]);
                 }
-
-                // Notify child store that items were updated in-place
-                child_store.items_changed(0, 0, 0);
             }
 
             // Remove stale child stores for groups that disappeared
             stores.retain(|pid, _| active_pids.contains(pid));
         }
 
-        // 3. Update root store with group leaders
-        let new_count = snapshot.app_groups.len();
-        let old_count = self.store.n_items() as usize;
+        // 3. PID-stable update of root store
+        //    TreeListModel caches create_func results per position, so we must
+        //    keep items at stable positions (matched by PID) to preserve expansion state.
+        //    Items that are new get appended; items that disappeared get removed.
+        let new_groups: Vec<&crate::model::AppGroup> = snapshot.app_groups.iter().collect();
 
-        for (i, group) in snapshot.app_groups.iter().enumerate() {
-            if i < old_count {
-                if let Some(obj) = self.store.item(i as u32).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+        // Build PID->position map of current store
+        let mut current_pids: HashMap<i32, u32> = HashMap::new();
+        for i in 0..self.store.n_items() {
+            if let Some(obj) = self.store.item(i).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+                current_pids.insert(obj.pid(), i);
+            }
+        }
+
+        // Build set of new PIDs
+        let new_pid_set: std::collections::HashSet<i32> = new_groups.iter().map(|g| g.leader.pid).collect();
+
+        // Remove items no longer present (iterate in reverse to keep indices stable)
+        let mut removed_positions: Vec<u32> = current_pids.iter()
+            .filter(|(pid, _)| !new_pid_set.contains(pid))
+            .map(|(_, &pos)| pos)
+            .collect();
+        removed_positions.sort_unstable_by(|a, b| b.cmp(a)); // reverse order
+        for pos in &removed_positions {
+            self.store.remove(*pos);
+        }
+
+        // Rebuild PID->position map after removals
+        let mut current_pids: HashMap<i32, u32> = HashMap::new();
+        for i in 0..self.store.n_items() {
+            if let Some(obj) = self.store.item(i).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+                current_pids.insert(obj.pid(), i);
+            }
+        }
+
+        // Update existing items in-place, append new ones
+        // Track which positions need TreeListModel invalidation (expandability changed)
+        let mut needs_invalidation: Vec<u32> = Vec::new();
+        for group in &new_groups {
+            if let Some(&pos) = current_pids.get(&group.leader.pid) {
+                // Existing item: update in-place
+                if let Some(obj) = self.store.item(pos).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+                    let was_expandable = obj.is_group() && obj.child_count() > 0;
                     obj.set_from_group(group);
+                    let now_expandable = obj.is_group() && obj.child_count() > 0;
+                    if was_expandable != now_expandable {
+                        needs_invalidation.push(pos);
+                    }
                 }
             } else {
+                // New item: append (TreeListModel will call create_func)
                 let obj = ProcessObject::new();
                 obj.set_from_group(group);
                 self.store.append(&obj);
             }
         }
 
-        if old_count > new_count {
-            self.store.splice(new_count as u32, (old_count - new_count) as u32, &[] as &[ProcessObject]);
+        // Invalidate items whose expandability changed by remove+re-add
+        // (TreeListModel only calls create_func for new items)
+        // Process in reverse order to keep positions stable
+        needs_invalidation.sort_unstable_by(|a, b| b.cmp(a));
+        for pos in needs_invalidation {
+            if let Some(obj) = self.store.item(pos).and_then(|o| o.downcast::<ProcessObject>().ok()) {
+                self.store.remove(pos);
+                self.store.insert(pos, &obj);
+            }
         }
 
         // Save scroll position before triggering re-sort
         let vadj = self.scroll.vadjustment();
         let scroll_pos = vadj.value();
-
-        // Notify the sort/filter/tree model that items changed
-        self.store.items_changed(0, 0, 0);
 
         // Trigger re-sort so columns reflect updated values
         if let Some(sorter) = self.sort_model.sorter() {
