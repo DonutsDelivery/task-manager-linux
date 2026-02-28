@@ -11,6 +11,9 @@ install: build
 	@mkdir -p $(PREFIX)/bin
 	cp target/release/$(BINARY) /tmp/$(BINARY)-install
 	mv /tmp/$(BINARY)-install $(PREFIX)/bin/$(BINARY)
+	@mkdir -p $(PREFIX)/share/icons/hicolor/scalable/apps
+	cp icons/task-manager-linux.svg $(PREFIX)/share/icons/hicolor/scalable/apps/task-manager-linux.svg
+	@gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null || true
 	@echo "Installed to $(PREFIX)/bin/$(BINARY)"
 
 run: install

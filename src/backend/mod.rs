@@ -9,6 +9,7 @@ mod desktop_resolver;
 mod window_resolver;
 pub mod de_restart;
 pub mod shortcut_setup;
+pub mod shortcut_daemon;
 pub mod startup;
 pub mod services;
 pub mod users;
