@@ -600,12 +600,6 @@ impl ProcessTab {
         container_col.set_sorter(Some(&container_sorter));
         column_view.append_column(&container_col);
 
-        // Enable sorting via TreeListRowSorter wrapping the column view sorter
-        if let Some(cv_sorter) = column_view.sorter() {
-            let tree_sorter = gtk::TreeListRowSorter::new(Some(cv_sorter));
-            sort_model.set_sorter(Some(&tree_sorter));
-        }
-
         // Scroll window
         let scroll = gtk::ScrolledWindow::builder()
             .vexpand(true)
@@ -614,6 +608,17 @@ impl ProcessTab {
             .build();
         widget.append(&scroll);
         let scroll_ref = scroll.clone();
+
+        // Enable sorting via TreeListRowSorter wrapping the column view sorter.
+        // Any sort change replaces the visible order, so start the new order at the top.
+        if let Some(cv_sorter) = column_view.sorter() {
+            let tree_sorter = gtk::TreeListRowSorter::new(Some(cv_sorter));
+            let scroll_for_sort = scroll.clone();
+            tree_sorter.connect_changed(move |_, _| {
+                scroll_for_sort.vadjustment().set_value(0.0);
+            });
+            sort_model.set_sorter(Some(&tree_sorter));
+        }
 
         // Context menu
         let children_cache: Rc<RefCell<HashMap<i32, Vec<crate::model::ProcessInfo>>>> =
@@ -946,17 +951,10 @@ impl ProcessTab {
             }
         }
 
-        // Save scroll position before triggering re-sort
-        let vadj = self.scroll.vadjustment();
-        let scroll_pos = vadj.value();
-
         // Trigger re-sort so columns reflect updated values
         if let Some(sorter) = self.sort_model.sorter() {
             sorter.changed(gtk::SorterChange::Different);
         }
-
-        // Restore scroll position
-        vadj.set_value(scroll_pos);
     }
 }
 
