@@ -43,6 +43,7 @@ jobs:
         run: |
           mkdir -p dist/task-manager-linux
           cp target/release/task-manager-linux dist/task-manager-linux/
+          cp icons/task-manager-linux.svg dist/task-manager-linux/
           cp data/task-manager.desktop dist/task-manager-linux/
           cp scripts/setup-shortcut.sh dist/task-manager-linux/
           cp README.md dist/task-manager-linux/
