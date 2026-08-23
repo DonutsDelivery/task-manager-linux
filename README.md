@@ -33,7 +33,7 @@ cd task-manager-linux
 - **Process Management** — View, end, force kill, and reprioritize running processes
 - **App Grouping** — Processes grouped by application using X11 window titles, `.desktop` files, and `/proc/comm`
 - **Performance Monitoring** — Real-time CPU, memory, disk, network, and GPU graphs
-- **GPU Support** — NVIDIA GPU monitoring via NVML
+- **GPU Support** — NVIDIA via NVML, AMD and Intel via sysfs (multi-GPU aware)
 - **DE Restart** — Quick-access button to restart desktop environment components (KDE Plasma, GNOME, XFCE, Cinnamon, MATE)
 - **Critical Process Protection** — Warning dialogs prevent accidentally killing system-critical processes like systemd or kwin
 - **Global Shortcut** — Register Ctrl+Shift+Esc from inside the app (KDE Plasma)
@@ -74,7 +74,7 @@ Or run the setup script:
 
 - **Rust** with GTK4-rs and libadwaita
 - **procfs** for process and system data
-- **nvml-wrapper** for NVIDIA GPU monitoring
+- **nvml-wrapper** for NVIDIA GPU monitoring (AMD/Intel read sysfs directly, no extra deps)
 - **x11rb** for window title resolution
 - **flume** for async backend-to-UI communication
 
