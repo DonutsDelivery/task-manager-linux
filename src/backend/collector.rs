@@ -37,7 +37,7 @@ impl Collector {
         let memory_collector = MemoryCollector::new();
         let mut disk_collector = DiskCollector::new();
         let mut network_collector = NetworkCollector::new();
-        let gpu_collector = GpuCollector::new();
+        let mut gpu_collector = GpuCollector::new();
         let mut process_collector = ProcessCollector::new();
         let battery_collector = BatteryCollector::new();
         let mut history_tracker = AppHistoryTracker::new();
