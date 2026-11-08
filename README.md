@@ -11,7 +11,11 @@ A lightweight, native system task manager for Linux built with **GTK4** and **Ru
 
 | Platform | Download |
 |----------|----------|
-| **Linux (x86_64)** | [Tarball (.tar.gz)](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/DonutTaskManager-x86_64.tar.gz) &#124; [Binary](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/donut-taskmgr-x86_64) |
+| **Linux (x86_64)** | [AppImage](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/DonutTaskManager-x86_64.AppImage) &#124; [Tarball (.tar.gz)](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/DonutTaskManager-x86_64.tar.gz) &#124; [Binary](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/donut-taskmgr-x86_64) |
+
+The AppImage bundles GTK4 and libadwaita and needs glibc 2.39 or newer. Rebuild it with
+`packaging/appimage/build-appimage.sh` (Docker). The Snap recipe is `packaging/snap/snapcraft.yaml`,
+built with `packaging/snap/build-snap.sh`.
 
 ### Quick Install
 

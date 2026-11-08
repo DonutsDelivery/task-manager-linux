@@ -19,11 +19,18 @@
       system processes by accident. Ctrl+Shift+Esc can be registered as a global shortcut from the app.
     </p>
   </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Processes grouped by application</caption>
+      <image>https://raw.githubusercontent.com/DonutsDelivery/task-manager-linux/main/data/screenshots/processes.png</image>
+    </screenshot>
+  </screenshots>
   <launchable type="desktop-id">online.donutsdelivery.DonutTaskManager.desktop</launchable>
   <provides>
     <binary>donut-taskmgr</binary>
   </provides>
   <url type="homepage">https://github.com/DonutsDelivery/task-manager-linux</url>
+  <url type="vcs-browser">https://github.com/DonutsDelivery/task-manager-linux</url>
   <url type="bugtracker">https://github.com/DonutsDelivery/task-manager-linux/issues</url>
   <categories>
     <category>System</category>

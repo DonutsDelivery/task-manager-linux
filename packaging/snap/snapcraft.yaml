@@ -1,0 +1,71 @@
+name: donuttaskmanager
+title: DonutTaskManager
+base: core24
+version: '0.4.0'
+summary: System process manager and performance monitor
+description: |
+  DonutTaskManager is a lightweight system monitor for Linux, built with GTK4
+  and libadwaita. It lists running processes grouped by application, and graphs
+  CPU, memory, disk, network and GPU use.
+
+  You can end, force kill and reprioritize processes, manage startup entries
+  and systemd services, and restart desktop environment components. A warning
+  dialog stops you from killing critical system processes by accident.
+
+  Connect the process-control interface by hand if the store has not
+  auto-connected it, or ending and reprioritizing processes will fail:
+  sudo snap connect donuttaskmanager:process-control
+license: MIT
+contact: admin@donutsdelivery.online
+website: https://github.com/DonutsDelivery/task-manager-linux
+source-code: https://github.com/DonutsDelivery/task-manager-linux
+issues: https://github.com/DonutsDelivery/task-manager-linux/issues
+icon: icons/hicolor/256x256/apps/online.donutsdelivery.DonutTaskManager.png
+grade: stable
+confinement: strict
+
+# The gnome extension supplies GTK4, libadwaita, the desktop, wayland, x11 and
+# opengl plugs, and the gnome-46-2404 content snap.
+apps:
+  donut-taskmgr:
+    command: usr/bin/donut-taskmgr
+    extensions: [gnome]
+    common-id: online.donutsdelivery.DonutTaskManager
+    desktop: usr/share/applications/online.donutsdelivery.DonutTaskManager.desktop
+    plugs:
+      - system-observe
+      - process-control
+      - hardware-observe
+      - mount-observe
+      - network-observe
+      - login-session-observe
+
+parts:
+  donut-taskmgr:
+    plugin: rust
+    source: .
+    rust-channel: '1.99.1'
+    rust-features: []
+    build-packages:
+      - pkg-config
+      - libgtk-4-dev
+      - libadwaita-1-dev
+      - libx11-dev
+      - libxcb1-dev
+      - libudev-dev
+      - curl
+    parse-info: [usr/share/metainfo/online.donutsdelivery.DonutTaskManager.metainfo.xml]
+    override-build: |
+      craftctl default
+      install -Dm644 data/online.donutsdelivery.DonutTaskManager.desktop \
+        $CRAFT_PART_INSTALL/usr/share/applications/online.donutsdelivery.DonutTaskManager.desktop
+      sed -i 's|^Icon=.*|Icon=${SNAP}/usr/share/icons/hicolor/256x256/apps/online.donutsdelivery.DonutTaskManager.png|' \
+        $CRAFT_PART_INSTALL/usr/share/applications/online.donutsdelivery.DonutTaskManager.desktop
+      install -Dm644 data/online.donutsdelivery.DonutTaskManager.metainfo.xml \
+        $CRAFT_PART_INSTALL/usr/share/metainfo/online.donutsdelivery.DonutTaskManager.metainfo.xml
+      install -Dm644 icons/online.donutsdelivery.DonutTaskManager.svg \
+        $CRAFT_PART_INSTALL/usr/share/icons/hicolor/scalable/apps/online.donutsdelivery.DonutTaskManager.svg
+      for size in 16 22 24 32 48 64 128 256 512; do
+        install -Dm644 icons/hicolor/${size}x${size}/apps/online.donutsdelivery.DonutTaskManager.png \
+          $CRAFT_PART_INSTALL/usr/share/icons/hicolor/${size}x${size}/apps/online.donutsdelivery.DonutTaskManager.png
+      done
