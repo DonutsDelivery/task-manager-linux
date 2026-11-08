@@ -1,32 +1,39 @@
-# Task Manager Linux
+# DonutTaskManager
 
 A lightweight, native system task manager for Linux built with **GTK4** and **Rust**.
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/ZhvPhXrdZ4)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/donutsdelivery)
 
-![Task Manager mockup](data/mockup.svg)
+![DonutTaskManager mockup](data/mockup.svg)
 
 ## Download
 
 | Platform | Download |
 |----------|----------|
-| **Linux (x86_64)** | [Tarball (.tar.gz)](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64.tar.gz) &#124; [Binary](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64) |
+| **Linux (x86_64)** | [Tarball (.tar.gz)](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/DonutTaskManager-x86_64.tar.gz) &#124; [Binary](https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/donut-taskmgr-x86_64) |
 
 ### Quick Install
 
 ```bash
 # Download and extract
-curl -LO https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/task-manager-linux-x86_64.tar.gz
-tar xzf task-manager-linux-x86_64.tar.gz
-cd task-manager-linux
+curl -LO https://github.com/DonutsDelivery/task-manager-linux/releases/latest/download/DonutTaskManager-x86_64.tar.gz
+tar xzf DonutTaskManager-x86_64.tar.gz
+cd DonutTaskManager
 
 # Run
-./task-manager-linux
+./donut-taskmgr
+
+# Optional: install the launcher, icon and Ctrl+Shift+Esc shortcut for your user
+./setup-shortcut.sh
 ```
 
-> **Runtime dependencies:** GTK4 and libadwaita must be installed on your system.
+> **Runtime dependencies:** GTK 4.12 or newer and libadwaita 1.4 or newer must be installed.
 > Most modern Linux desktops (GNOME, KDE Plasma 6) include these by default.
+
+> **Upgrading from Task Manager Linux:** the first launch copies your settings from
+> `~/.config/task-manager-linux/` to `~/.config/donut-taskmgr/`. `make install` and the in-app
+> shortcut installer remove the old `task-manager-linux` binary, launcher and shortcut.
 
 ## Features
 
@@ -36,11 +43,11 @@ cd task-manager-linux
 - **GPU Support** — NVIDIA GPU monitoring via NVML
 - **DE Restart** — Quick-access button to restart desktop environment components (KDE Plasma, GNOME, XFCE, Cinnamon, MATE)
 - **Critical Process Protection** — Warning dialogs prevent accidentally killing system-critical processes like systemd or kwin
-- **Global Shortcut** — Register Ctrl+Shift+Esc from inside the app (KDE Plasma)
+- **Global Shortcut** — Register Ctrl+Shift+Esc from inside the app (KDE Plasma, GNOME, XFCE, Cinnamon, MATE, or an evdev listener elsewhere)
 
 ## Building from Source
 
-Requires Rust and GTK4/libadwaita development libraries.
+Requires Rust and the GTK4/libadwaita development libraries (GTK 4.12+, libadwaita 1.4+).
 
 ```bash
 # Arch Linux
@@ -53,7 +60,14 @@ sudo apt install libgtk-4-dev libadwaita-1-dev
 cargo build --release
 ```
 
-The binary will be at `target/release/task-manager-linux`.
+The binary will be at `target/release/donut-taskmgr`. To install it for your user
+(binary, icons, desktop file and AppStream metadata under `~/.local`):
+
+```bash
+make install
+```
+
+Set `PREFIX=/usr` (and `DESTDIR` for packaging) to install system-wide.
 
 ## Keyboard Shortcut
 
@@ -64,7 +78,8 @@ To register Ctrl+Shift+Esc as a global shortcut (KDE Plasma):
 3. Click **Install Ctrl+Shift+Esc Shortcut**
 4. Log out and back in
 
-Or run the setup script:
+On KDE Plasma 5 and 6 you can also run the setup script, which uses `kwriteconfig6` or
+`kwriteconfig5`, whichever is installed:
 
 ```bash
 ./scripts/setup-shortcut.sh
@@ -80,4 +95,4 @@ Or run the setup script:
 
 ## License
 
-MIT
+MIT. Copyright (c) 2026 Zero Action (DonutsDelivery). See [LICENSE](LICENSE).
