@@ -39,6 +39,11 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.4.0" date="2026-11-08">
+      <description>
+        <p>Renamed to DonutTaskManager. The binary is now donut-taskmgr, and the app ID is online.donutsdelivery.DonutTaskManager.</p>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-07-30"/>
   </releases>
 </component>

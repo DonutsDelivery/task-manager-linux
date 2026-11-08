@@ -44,6 +44,7 @@ jobs:
           mkdir -p dist/DonutTaskManager
           cp target/release/donut-taskmgr dist/DonutTaskManager/
           cp icons/online.donutsdelivery.DonutTaskManager.svg dist/DonutTaskManager/
+          cp -r icons/hicolor dist/DonutTaskManager/
           cp data/online.donutsdelivery.DonutTaskManager.desktop dist/DonutTaskManager/
           cp data/online.donutsdelivery.DonutTaskManager.metainfo.xml dist/DonutTaskManager/
           cp scripts/setup-shortcut.sh dist/DonutTaskManager/
