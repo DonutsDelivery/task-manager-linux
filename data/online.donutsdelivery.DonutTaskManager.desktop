@@ -1,13 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=Task Manager
+Name=DonutTaskManager
 GenericName=System Monitor
 Comment=System process manager and performance monitor
-Exec=task-manager-linux
-Icon=utilities-system-monitor
+Exec=donut-taskmgr
+Icon=online.donutsdelivery.DonutTaskManager
 Terminal=false
-Categories=System;Monitor;
+Categories=System;Monitor;GTK;
 Keywords=task;process;system;monitor;cpu;memory;gpu;
 StartupNotify=true
+StartupWMClass=online.donutsdelivery.DonutTaskManager
 X-KDE-SubstituteUID=false
 X-KDE-Shortcuts=Ctrl+Shift+Esc
