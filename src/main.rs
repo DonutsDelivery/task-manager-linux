@@ -19,6 +19,10 @@ fn main() {
         backend::shortcut_daemon::run_daemon();
     }
 
-    let app = app::TaskManagerApp::new();
+    // Under X11 the window class comes from the program name. Setting it to the
+    // app id makes it match StartupWMClass in the desktop file.
+    gtk4::glib::set_prgname(Some(APP_ID));
+
+    let app = app::DonutTaskManagerApp::new();
     std::process::exit(app.run());
 }

@@ -7,11 +7,11 @@ use crate::window::MainWindow;
 use crate::CSS;
 use crate::APP_ID;
 
-pub struct TaskManagerApp {
+pub struct DonutTaskManagerApp {
     app: adw::Application,
 }
 
-impl TaskManagerApp {
+impl DonutTaskManagerApp {
     pub fn new() -> Self {
         let app = adw::Application::builder()
             .application_id(APP_ID)
