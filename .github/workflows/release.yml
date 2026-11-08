@@ -41,21 +41,22 @@ jobs:
 
       - name: Package tarball
         run: |
-          mkdir -p dist/task-manager-linux
-          cp target/release/task-manager-linux dist/task-manager-linux/
-          cp icons/task-manager-linux.svg dist/task-manager-linux/
-          cp data/task-manager.desktop dist/task-manager-linux/
-          cp scripts/setup-shortcut.sh dist/task-manager-linux/
-          cp README.md dist/task-manager-linux/
-          cd dist && tar czf ../task-manager-linux-x86_64.tar.gz task-manager-linux
+          mkdir -p dist/DonutTaskManager
+          cp target/release/donut-taskmgr dist/DonutTaskManager/
+          cp icons/online.donutsdelivery.DonutTaskManager.svg dist/DonutTaskManager/
+          cp data/online.donutsdelivery.DonutTaskManager.desktop dist/DonutTaskManager/
+          cp data/online.donutsdelivery.DonutTaskManager.metainfo.xml dist/DonutTaskManager/
+          cp scripts/setup-shortcut.sh dist/DonutTaskManager/
+          cp README.md LICENSE dist/DonutTaskManager/
+          cd dist && tar czf ../DonutTaskManager-x86_64.tar.gz DonutTaskManager
 
       - name: Package standalone binary
-        run: cp target/release/task-manager-linux task-manager-linux-x86_64
+        run: cp target/release/donut-taskmgr donut-taskmgr-x86_64
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            task-manager-linux-x86_64.tar.gz
-            task-manager-linux-x86_64
+            DonutTaskManager-x86_64.tar.gz
+            donut-taskmgr-x86_64
