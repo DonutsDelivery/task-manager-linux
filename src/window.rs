@@ -28,7 +28,7 @@ impl MainWindow {
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .title("Task Manager")
+            .title("DonutTaskManager")
             .default_width(config.window_width)
             .default_height(config.window_height)
             .build();

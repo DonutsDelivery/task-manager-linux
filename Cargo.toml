@@ -1,7 +1,15 @@
 [package]
-name = "task-manager-linux"
+name = "donut-taskmgr"
 version = "0.3.2"
 edition = "2021"
+description = "DonutTaskManager, a GTK4 system monitor and process manager"
+license = "MIT"
+authors = ["Zero Action (DonutsDelivery)"]
+repository = "https://github.com/DonutsDelivery/task-manager-linux"
+
+[[bin]]
+name = "donut-taskmgr"
+path = "src/main.rs"
 
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_12"] }

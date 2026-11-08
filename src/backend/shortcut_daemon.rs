@@ -3,7 +3,7 @@ use std::os::fd::AsRawFd;
 use std::process::Command;
 
 /// Run the evdev shortcut listener daemon.
-/// Monitors all keyboards for Ctrl+Shift+Escape and launches the task manager.
+/// Monitors all keyboards for Ctrl+Shift+Escape and launches DonutTaskManager.
 /// This function never returns under normal operation.
 pub fn run_daemon() -> ! {
     loop {
@@ -85,7 +85,7 @@ fn listen_loop() -> Result<(), String> {
                             if pressed { shift = true; } else if released { shift = false; }
                         }
                         KeyCode::KEY_ESC if pressed && ctrl && shift => {
-                            launch_task_manager();
+                            launch_taskmgr();
                         }
                         _ => {}
                     }
@@ -95,10 +95,10 @@ fn listen_loop() -> Result<(), String> {
     }
 }
 
-fn launch_task_manager() {
+fn launch_taskmgr() {
     let bin = dirs::home_dir()
         .expect("no home dir")
-        .join(".local/bin/task-manager-linux");
+        .join(".local/bin/donut-taskmgr");
 
     let bin_path = if bin.exists() {
         bin

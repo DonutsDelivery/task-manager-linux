@@ -8,7 +8,7 @@ mod ui;
 mod util;
 mod window;
 
-const APP_ID: &str = "com.task-manager.linux";
+const APP_ID: &str = "online.donutsdelivery.DonutTaskManager";
 const CSS: &str = include_str!("../style/style.css");
 
 fn main() {

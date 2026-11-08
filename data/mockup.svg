@@ -23,7 +23,7 @@
     <circle cx="64" cy="23" r="7" fill="#57e389"/>
 
     <!-- Title -->
-    <text x="400" y="28" fill="#ffffff" font-size="13" font-weight="600" text-anchor="middle">Task Manager</text>
+    <text x="400" y="28" fill="#ffffff" font-size="13" font-weight="600" text-anchor="middle">DonutTaskManager</text>
 
     <!-- Header buttons (right side) -->
     <!-- Restart DE button -->

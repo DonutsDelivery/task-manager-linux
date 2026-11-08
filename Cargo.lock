@@ -1505,7 +1505,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
 
 [[package]]
-name = "task-manager-linux"
+name = "donut-taskmgr"
 version = "0.3.2"
 dependencies = [
  "dirs",

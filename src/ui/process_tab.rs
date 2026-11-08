@@ -981,7 +981,7 @@ fn do_kill(pid: i32, name: &str, signal: nix::sys::signal::Signal, widget: &gtk:
         Err(e) => {
             log::error!("Failed to send {:?} to PID {} ({}): {}", signal, pid, name, e);
             let msg = format!(
-                "Failed to {} \"{}\" (PID {})\n\n{}\n\nTry launching Task Manager with elevated privileges.",
+                "Failed to {} \"{}\" (PID {})\n\n{}\n\nTry launching DonutTaskManager with elevated privileges.",
                 if signal == nix::sys::signal::Signal::SIGKILL { "force kill" } else { "end" },
                 name,
                 pid,
@@ -1005,6 +1005,10 @@ fn is_critical_process(pid: i32) -> bool {
         | "kwin_wayland" | "kwin_x11" | "plasmashell" | "sddm"
         | "dbus-daemon" | "polkitd" | "loginctl" | "logind"
         | "systemd-logind" | "pipewire" | "wireplumber"
+        | "dbus-broker" | "dbus-broker-lau"
+        | "gnome-shell" | "mutter" | "gnome-session-b" | "gnome-session-binary"
+        | "gdm" | "gdm3" | "xfwm4" | "xfce4-session"
+        | "sway" | "Hyprland" | "labwc" | "wayfire" | "cosmic-comp"
     )
 }
 
@@ -1017,7 +1021,7 @@ fn set_priority(pid: i32, name: String, nice: i32, widget: &gtk::ColumnView) {
             let err = std::io::Error::last_os_error();
             log::error!("Failed to set PID {} ({}) priority: {}", pid, name, err);
             let msg = format!(
-                "Failed to set priority for \"{}\" (PID {})\n\n{}\n\nTry launching Task Manager with elevated privileges.",
+                "Failed to set priority for \"{}\" (PID {})\n\n{}\n\nTry launching DonutTaskManager with elevated privileges.",
                 name, pid, err
             );
             show_error_dialog(widget, &msg);
@@ -1044,7 +1048,7 @@ fn do_signal(pid: i32, name: &str, sig: Signal, widget: &gtk::ColumnView) {
         Err(e) => {
             log::error!("Failed to send {:?} to PID {} ({}): {}", sig, pid, name, e);
             let msg = format!(
-                "Failed to send signal {:?} to \"{}\" (PID {})\n\n{}\n\nTry launching Task Manager with elevated privileges.",
+                "Failed to send signal {:?} to \"{}\" (PID {})\n\n{}\n\nTry launching DonutTaskManager with elevated privileges.",
                 sig,
                 name,
                 pid,

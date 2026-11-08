@@ -110,8 +110,14 @@ impl StartupCollector {
                 gnome_autostart_enabled = Some(val.trim().eq_ignore_ascii_case("true"));
             } else if let Some(val) = line.strip_prefix("StartupWMClass=") {
                 wm_class = Some(val.trim().to_string());
-            } else if let Some(val) = line.strip_prefix("X-TaskManager-LaunchMinimized=") {
+            } else if let Some(val) = line.strip_prefix("X-DonutTaskManager-LaunchMinimized=") {
                 launch_minimized = Some(val.trim().eq_ignore_ascii_case("true"));
+            } else if let Some(val) = line.strip_prefix("X-TaskManager-LaunchMinimized=") {
+                // Key written by builds before the DonutTaskManager rename.
+                // The new key wins when both are present.
+                if launch_minimized.is_none() {
+                    launch_minimized = Some(val.trim().eq_ignore_ascii_case("true"));
+                }
             }
         }
 
@@ -473,7 +479,7 @@ impl StartupCollector {
         }
 
         // Update the desktop file with our custom key
-        Self::set_desktop_key(&entry.file_path, "X-TaskManager-LaunchMinimized", if minimized { "true" } else { "false" })?;
+        Self::set_desktop_key(&entry.file_path, "X-DonutTaskManager-LaunchMinimized", if minimized { "true" } else { "false" })?;
 
         // Manage KWin window rule
         if !entry.wm_class.is_empty() {

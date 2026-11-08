@@ -38,6 +38,7 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Self {
+        migrate_legacy_config();
         let path = config_path();
         if let Ok(data) = fs::read_to_string(&path) {
             serde_json::from_str(&data).unwrap_or_default()
@@ -57,9 +58,27 @@ impl Config {
     }
 }
 
+fn config_base() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from("~/.config"))
+}
+
 fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("task-manager-linux")
-        .join("config.json")
+    config_base().join("donut-taskmgr").join("config.json")
+}
+
+/// Copy the config written under the old "task-manager-linux" name, once.
+/// The old file stays where it is.
+fn migrate_legacy_config() {
+    let new_path = config_path();
+    if new_path.exists() {
+        return;
+    }
+    let old_path = config_base().join("task-manager-linux").join("config.json");
+    if !old_path.is_file() {
+        return;
+    }
+    if let Some(parent) = new_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::copy(&old_path, &new_path);
 }
