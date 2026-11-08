@@ -2,32 +2,56 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::APP_ID;
+
+const BIN_NAME: &str = "donut-taskmgr";
+/// Key used for the GNOME, Cinnamon and MATE custom keybinding entries.
+const BINDING_KEY: &str = "donut-taskmgr";
+
+const ICON_SVG: &str = include_str!("../../icons/online.donutsdelivery.DonutTaskManager.svg");
+
 const DESKTOP_ENTRY: &str = "\
 [Desktop Entry]
 Type=Application
-Name=Task Manager
+Name=DonutTaskManager
 GenericName=System Monitor
 Comment=System process manager and performance monitor
 Exec={bin_path}
-Icon=task-manager-linux
+Icon=online.donutsdelivery.DonutTaskManager
 Terminal=false
-Categories=System;Monitor;
+Categories=System;Monitor;GTK;
 Keywords=task;process;system;monitor;cpu;memory;gpu;
 StartupNotify=true
+StartupWMClass=online.donutsdelivery.DonutTaskManager
 X-KDE-SubstituteUID=false
 X-KDE-Shortcuts=Ctrl+Shift+Esc
 ";
 
+// Names used by builds before the DonutTaskManager rename. install() removes
+// what those builds wrote so the user does not end up with two entries.
+const LEGACY_BIN_NAME: &str = "task-manager-linux";
+const LEGACY_DESKTOP_FILE: &str = "task-manager.desktop";
+const LEGACY_AUTOSTART_FILE: &str = "task-manager-shortcut.desktop";
+const LEGACY_BINDING_KEY: &str = "task-manager";
+
+fn home() -> PathBuf {
+    dirs::home_dir().expect("no home dir")
+}
+
 fn bin_dest() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".local/bin/task-manager-linux")
+    home().join(".local/bin").join(BIN_NAME)
 }
 
 fn desktop_dest() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".local/share/applications/task-manager.desktop")
+    home()
+        .join(".local/share/applications")
+        .join(format!("{}.desktop", APP_ID))
+}
+
+fn icon_dest() -> PathBuf {
+    home()
+        .join(".local/share/icons/hicolor/scalable/apps")
+        .join(format!("{}.svg", APP_ID))
 }
 
 /// Check whether the shortcut is already registered.
@@ -47,7 +71,7 @@ pub fn install() -> Result<String, String> {
     let bin_dir = bin_dst.parent().unwrap();
     fs::create_dir_all(bin_dir)
         .map_err(|e| format!("Failed to create ~/.local/bin: {}", e))?;
-    let tmp_dst = bin_dir.join(".task-manager-linux.tmp");
+    let tmp_dst = bin_dir.join(format!(".{}.tmp", BIN_NAME));
     fs::copy(&current_exe, &tmp_dst)
         .map_err(|e| format!("Failed to copy binary: {}", e))?;
 
@@ -69,6 +93,15 @@ pub fn install() -> Result<String, String> {
     fs::write(&desktop_dst, content)
         .map_err(|e| format!("Failed to write desktop file: {}", e))?;
 
+    // Icon for the desktop file. A missing icon is not worth failing over.
+    let icon_dst = icon_dest();
+    if let Some(parent) = icon_dst.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&icon_dst, ICON_SVG);
+
+    remove_legacy_files();
+
     // Register shortcut for the detected DE
     let shortcut_result = register_shortcut(&bin_dst);
 
@@ -79,6 +112,22 @@ pub fn install() -> Result<String, String> {
     }
 
     Ok(msg)
+}
+
+/// Delete the launcher, binary and autostart entry that older builds installed.
+fn remove_legacy_files() {
+    let _ = fs::remove_file(home().join(".local/share/applications").join(LEGACY_DESKTOP_FILE));
+    let _ = fs::remove_file(home().join(".local/bin").join(LEGACY_BIN_NAME));
+    let _ = fs::remove_file(home().join(".config/autostart").join(LEGACY_AUTOSTART_FILE));
+}
+
+/// Drop one quoted entry from a gsettings string-array value such as
+/// `['/a/', '/b/']`.
+fn remove_list_entry(list: &str, entry: &str) -> String {
+    let quoted = format!("'{}'", entry);
+    list.replace(&format!("{}, ", quoted), "")
+        .replace(&format!(", {}", quoted), "")
+        .replace(&quoted, "")
 }
 
 /// Detect DE and register the shortcut using the appropriate method.
@@ -107,21 +156,42 @@ fn register_shortcut(bin_path: &std::path::Path) -> Result<String, String> {
     }
 }
 
+/// Plasma 6 ships kwriteconfig6, Plasma 5 only kwriteconfig5.
+fn kwriteconfig_command() -> &'static str {
+    ["kwriteconfig6", "kwriteconfig5"]
+        .into_iter()
+        .find(|cmd| Command::new(*cmd).arg("--help").output().is_ok())
+        .unwrap_or("kwriteconfig6")
+}
+
 fn register_kde_shortcut() -> Result<(), String> {
-    Command::new("kwriteconfig6")
+    let cmd = kwriteconfig_command();
+
+    // Remove the binding the old task-manager.desktop entry registered.
+    let _ = Command::new(cmd)
         .args([
             "--file", "kglobalshortcutsrc",
-            "--group", "services", "--group", "task-manager.desktop",
+            "--group", "services", "--group", LEGACY_DESKTOP_FILE,
+            "--key", "_launch", "--delete",
+        ])
+        .output();
+
+    Command::new(cmd)
+        .args([
+            "--file", "kglobalshortcutsrc",
+            "--group", "services", "--group", &format!("{}.desktop", APP_ID),
             "--key", "_launch",
-            "Ctrl+Shift+Esc,none,Task Manager",
+            "Ctrl+Shift+Esc,none,DonutTaskManager",
         ])
         .output()
-        .map_err(|e| format!("kwriteconfig6 not found or failed: {}", e))?;
+        .map_err(|e| format!("{} not found or failed: {}", cmd, e))?;
     Ok(())
 }
 
 fn register_gnome_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
-    let path = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/task-manager/";
+    let base = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings";
+    let path = format!("{}/{}/", base, BINDING_KEY);
+    let legacy_path = format!("{}/{}/", base, LEGACY_BINDING_KEY);
     let schema = "org.gnome.settings-daemon.plugins.media-keys";
     let custom_schema = format!("{}.custom-keybinding:{}", schema, path);
 
@@ -132,10 +202,17 @@ fn register_gnome_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("gsettings not found: {}", e))?;
     let existing_str = String::from_utf8_lossy(&existing.stdout).trim().to_string();
 
+    // Drop the binding an older build registered under the old path
+    let legacy_schema = format!("{}.custom-keybinding:{}", schema, legacy_path);
+    let existing_str = remove_list_entry(&existing_str, &legacy_path);
+    let _ = Command::new("gsettings")
+        .args(["reset-recursively", &legacy_schema])
+        .output();
+
     // Add our path if not already present
-    let new_list = if existing_str.contains(path) {
+    let new_list = if existing_str.contains(&path) {
         existing_str.clone()
-    } else if existing_str == "@as []" || existing_str.is_empty() {
+    } else if existing_str == "@as []" || existing_str == "[]" || existing_str.is_empty() {
         format!("['{}']", path)
     } else {
         // Insert before the closing bracket
@@ -143,7 +220,7 @@ fn register_gnome_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
     };
 
     run_gsettings(&[schema, "custom-keybindings", &new_list])?;
-    run_gsettings(&[&custom_schema, "name", "Task Manager"])?;
+    run_gsettings(&[&custom_schema, "name", "DonutTaskManager"])?;
     run_gsettings(&[&custom_schema, "command", &bin_path.to_string_lossy()])?;
     run_gsettings(&[&custom_schema, "binding", "<Control><Shift>Escape"])?;
 
@@ -166,7 +243,9 @@ fn register_xfce_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
 
 fn register_cinnamon_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
     let schema = "org.cinnamon.desktop.keybindings.custom-keybinding";
-    let path = "/org/cinnamon/desktop/keybindings/custom-keybindings/task-manager/";
+    let base = "/org/cinnamon/desktop/keybindings/custom-keybindings";
+    let path = format!("{}/{}/", base, BINDING_KEY);
+    let legacy_path = format!("{}/{}/", base, LEGACY_BINDING_KEY);
     let custom_schema = format!("{}:{}", schema, path);
 
     // Read existing list
@@ -176,17 +255,24 @@ fn register_cinnamon_shortcut(bin_path: &std::path::Path) -> Result<(), String> 
         .map_err(|e| format!("gsettings not found: {}", e))?;
     let existing_str = String::from_utf8_lossy(&existing.stdout).trim().to_string();
 
-    let entry = "'task-manager'";
-    let new_list = if existing_str.contains("task-manager") {
+    // Drop the binding an older build registered under the old name
+    let legacy_schema = format!("{}:{}", schema, legacy_path);
+    let existing_str = remove_list_entry(&existing_str, LEGACY_BINDING_KEY);
+    let _ = Command::new("gsettings")
+        .args(["reset-recursively", &legacy_schema])
+        .output();
+
+    let entry = format!("'{}'", BINDING_KEY);
+    let new_list = if existing_str.contains(&entry) {
         existing_str.clone()
-    } else if existing_str == "@as []" || existing_str.is_empty() {
+    } else if existing_str == "@as []" || existing_str == "[]" || existing_str.is_empty() {
         format!("[{}]", entry)
     } else {
         existing_str.replace(']', &format!(", {}]", entry))
     };
 
     run_gsettings(&["org.cinnamon.desktop.keybindings", "custom-list", &new_list])?;
-    run_gsettings(&[&custom_schema, "name", "Task Manager"])?;
+    run_gsettings(&[&custom_schema, "name", "DonutTaskManager"])?;
     run_gsettings(&[&custom_schema, "command", &bin_path.to_string_lossy()])?;
     run_gsettings(&[&custom_schema, "binding", "['<Control><Shift>Escape']"])?;
 
@@ -195,10 +281,21 @@ fn register_cinnamon_shortcut(bin_path: &std::path::Path) -> Result<(), String> 
 
 fn register_mate_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
     // MATE uses dconf paths similar to GNOME 2
+    let base = format!("/org/mate/desktop/keybindings/{}", BINDING_KEY);
+
+    // Remove the binding an older build registered under the old name
+    let _ = Command::new("dconf")
+        .args([
+            "reset",
+            "-f",
+            &format!("/org/mate/desktop/keybindings/{}/", LEGACY_BINDING_KEY),
+        ])
+        .output();
+
     Command::new("dconf")
         .args([
             "write",
-            "/org/mate/desktop/keybindings/task-manager/action",
+            &format!("{}/action", base),
             &format!("'{}'", bin_path.display()),
         ])
         .output()
@@ -207,8 +304,8 @@ fn register_mate_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
     Command::new("dconf")
         .args([
             "write",
-            "/org/mate/desktop/keybindings/task-manager/name",
-            "'Task Manager'",
+            &format!("{}/name", base),
+            "'DonutTaskManager'",
         ])
         .output()
         .map_err(|e| format!("dconf failed: {}", e))?;
@@ -216,7 +313,7 @@ fn register_mate_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
     Command::new("dconf")
         .args([
             "write",
-            "/org/mate/desktop/keybindings/task-manager/binding",
+            &format!("{}/binding", base),
             "'<Control><Shift>Escape'",
         ])
         .output()
@@ -228,7 +325,7 @@ fn register_mate_shortcut(bin_path: &std::path::Path) -> Result<(), String> {
 fn autostart_dest() -> PathBuf {
     dirs::home_dir()
         .expect("no home dir")
-        .join(".config/autostart/task-manager-shortcut.desktop")
+        .join(format!(".config/autostart/{}-shortcut.desktop", APP_ID))
 }
 
 fn install_evdev_daemon(bin_path: &std::path::Path) -> Result<(), String> {
@@ -239,8 +336,8 @@ fn install_evdev_daemon(bin_path: &std::path::Path) -> Result<(), String> {
     let content = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=Task Manager Shortcut Listener\n\
-         Comment=Listens for Ctrl+Shift+Escape to launch Task Manager\n\
+         Name=DonutTaskManager Shortcut Listener\n\
+         Comment=Listens for Ctrl+Shift+Escape to launch DonutTaskManager\n\
          Exec={} --shortcut-daemon\n\
          Hidden=false\n\
          NoDisplay=true\n\
