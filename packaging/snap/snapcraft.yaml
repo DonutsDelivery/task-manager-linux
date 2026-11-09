@@ -28,7 +28,7 @@ confinement: strict
 # opengl plugs, and the gnome-46-2404 content snap.
 apps:
   donut-taskmgr:
-    command: usr/bin/donut-taskmgr
+    command: bin/donut-taskmgr
     extensions: [gnome]
     common-id: online.donutsdelivery.DonutTaskManager
     desktop: usr/share/applications/online.donutsdelivery.DonutTaskManager.desktop

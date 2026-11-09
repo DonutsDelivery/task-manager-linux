@@ -17,6 +17,9 @@ The AppImage bundles GTK4 and libadwaita and needs glibc 2.39 or newer. Rebuild 
 `packaging/appimage/build-appimage.sh` (Docker). The Snap recipe is `packaging/snap/snapcraft.yaml`,
 built with `packaging/snap/build-snap.sh`.
 
+Snap: `sudo snap install donuttaskmanager`, then `sudo snap connect donuttaskmanager:process-control`
+so the app can end and reprioritize processes. The store connects it for you after its review.
+
 ### Quick Install
 
 ```bash

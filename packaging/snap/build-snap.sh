@@ -12,6 +12,8 @@
 # The published snap still gets its runtime libraries from the gnome-46-2404
 # content snap.
 #
+# The host's snap binary is mounted too, because snapcraft calls "snap pack".
+#
 # Usage: packaging/snap/build-snap.sh
 # Output: dist/snap/donuttaskmanager_<version>_amd64.snap
 set -euo pipefail
@@ -29,13 +31,17 @@ mkdir -p "$OUT" "$CACHE"
 
 # Tracked and new files only, so target/ and dist/ stay out of the snap source.
 SRC="$CACHE/src"
-rm -rf "$SRC" && mkdir -p "$SRC/snap"
+# Earlier runs leave root-owned build trees behind, so remove them from a container.
+[[ ! -e "$SRC" ]] || docker run --rm -v "$CACHE:/cache" "$IMAGE" rm -rf /cache/src
+mkdir -p "$SRC/snap"
 (cd "$ROOT" && git ls-files -co --exclude-standard -z | tar --null -T - -cf -) | tar -xf - -C "$SRC"
 cp "$HERE/snapcraft.yaml" "$SRC/snap/snapcraft.yaml"
+chmod -R u+rwX,go+rX "$SRC"   # snap pack refuses a world-unreadable icon
 
 docker run --rm \
     -v "$SNAPCRAFT_SNAP:/snap/snapcraft/current:ro" \
     -v "$CORE24_SNAP:/snap/core24/current:ro" \
+    -v "$(command -v snap):/usr/bin/snap:ro" \
     -v "$SRC:/build" \
     -v "$OUT:/out" \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
@@ -47,6 +53,10 @@ docker run --rm \
             python3 binutils file >/dev/null
         # Snapcraft reads its settings through snapctl when it thinks it runs as a snap.
         printf "#!/bin/sh\necho {}\n" > /usr/bin/snapctl && chmod +x /usr/bin/snapctl
+        # The rust plugin wants rustup on PATH; on a normal build host it comes from the rustup snap.
+        export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+        curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none >/dev/null
+        export PATH="$CARGO_HOME/bin:$PATH"
         export SNAP=/snap/snapcraft/current SNAP_NAME=snapcraft SNAP_INSTANCE_NAME=snapcraft SNAP_ARCH=amd64
         export PATH="$SNAP/libexec/snapcraft:$PATH" CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1
         SC="$SNAP/bin/python $SNAP/bin/snapcraft"
@@ -59,7 +69,9 @@ t = re.sub(r"\n    build-snaps:\n    - gnome-46-2404-sdk", "", t)
 open("/build/snap/snapcraft.yaml", "w").write(t)
 PY
         grep -q "gnome-46-2404-sdk$" snap/snapcraft.yaml && grep -n "build-snaps" snap/snapcraft.yaml && exit 1
-        $SC pack --destructive-mode --output /out/
+        trap "cp -r /root/.local/state/snapcraft/log /out/snapcraft-log 2>/dev/null; chown -R $HOST_UID:$HOST_GID /out" EXIT
+        $SC pack --destructive-mode
+        cp /build/*.snap /out/
         chown "$HOST_UID:$HOST_GID" /out/*.snap
     '
 ls -l "$OUT"/*.snap
