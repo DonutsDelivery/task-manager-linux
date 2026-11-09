@@ -21,9 +21,10 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="${OUT_DIR:-$ROOT/dist/snap}"
 CACHE="${DONUTTASKMGR_CACHE:-$HOME/.cache/donuttaskmanager-snap}"
 SNAPCRAFT_SNAP="$(readlink -f /var/lib/snapd/snap/snapcraft/current)"
+CORE24_SNAP="$(readlink -f /var/lib/snapd/snap/core24/current)"   # the loader that snapcraft's python needs
 IMAGE="${BASE_IMAGE:-ubuntu:24.04}"
 
-[[ -d "$SNAPCRAFT_SNAP" ]] || { echo "the snapcraft snap is not installed" >&2; exit 1; }
+[[ -d "$SNAPCRAFT_SNAP" && -d "$CORE24_SNAP" ]] || { echo "the snapcraft and core24 snaps must be installed" >&2; exit 1; }
 mkdir -p "$OUT" "$CACHE"
 
 # Tracked and new files only, so target/ and dist/ stay out of the snap source.
@@ -34,6 +35,7 @@ cp "$HERE/snapcraft.yaml" "$SRC/snap/snapcraft.yaml"
 
 docker run --rm \
     -v "$SNAPCRAFT_SNAP:/snap/snapcraft/current:ro" \
+    -v "$CORE24_SNAP:/snap/core24/current:ro" \
     -v "$SRC:/build" \
     -v "$OUT:/out" \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
@@ -43,6 +45,8 @@ docker run --rm \
         apt-get install -y -qq --no-install-recommends \
             build-essential git curl ca-certificates squashfs-tools sudo xz-utils \
             python3 binutils file >/dev/null
+        # Snapcraft reads its settings through snapctl when it thinks it runs as a snap.
+        printf "#!/bin/sh\necho {}\n" > /usr/bin/snapctl && chmod +x /usr/bin/snapctl
         export SNAP=/snap/snapcraft/current SNAP_NAME=snapcraft SNAP_INSTANCE_NAME=snapcraft SNAP_ARCH=amd64
         export PATH="$SNAP/libexec/snapcraft:$PATH" CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1
         SC="$SNAP/bin/python $SNAP/bin/snapcraft"

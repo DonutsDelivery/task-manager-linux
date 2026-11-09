@@ -47,6 +47,11 @@ install -Dm644 /src/LICENSE "$APPDIR/usr/share/licenses/$BIN/LICENSE"
 mkdir -p "$APPDIR/usr/share/icons"
 cp -a /usr/share/icons/Adwaita "$APPDIR/usr/share/icons/Adwaita"
 
+# GTK finds SVG icons through the shared MIME database. Without it on the host the
+# symbolic icons fail to load, so ship a copy. XDG_DATA_DIRS includes the AppDir.
+mkdir -p "$APPDIR/usr/share"
+cp -a /usr/share/mime "$APPDIR/usr/share/mime"
+
 # linuxdeploy and its GTK plugin.
 TOOLS=/cache/tools
 mkdir -p "$TOOLS"
@@ -75,6 +80,58 @@ cd /cache
     --icon-file "/src/icons/hicolor/256x256/apps/$APP_ID.png" \
     --plugin gtk
 
+# Bundle glibc with its loader. The libraries come from Ubuntu 24.04 (glibc 2.39),
+# but GTK 4.12 and libadwaita 1.4 do not exist for Ubuntu 22.04, the oldest release
+# the AppImageHub test accepts as a base. A bundled C library keeps the AppImage
+# independent of the host's glibc. linuxdeploy excludes all of these, so copy them.
+LIBDIR=/lib/x86_64-linux-gnu
+mkdir -p "$APPDIR/usr/lib"
+for lib in ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libmvec.so.1 libdl.so.2 libpthread.so.0 \
+           librt.so.1 libutil.so.1 libresolv.so.2 libanl.so.1 libnss_files.so.2 libnss_dns.so.2 \
+           libstdc++.so.6 libgcc_s.so.1; do
+    cp -L "$LIBDIR/$lib" "$APPDIR/usr/lib/$lib"
+done
+cp -a /usr/lib/x86_64-linux-gnu/gconv "$APPDIR/usr/lib/gconv"
+
+# linuxdeploy skips libraries on its exclude list, such as fribidi, freetype and
+# harfbuzz, expecting the host to have them. A host may not, or may have versions
+# too old for GTK 4.14, so copy whatever still resolves outside the AppDir. Only the
+# libraries tied to the host's graphics stack and fonts stay on the host.
+HOST_ONLY='^(libGL|libEGL|libGLX|libGLdispatch|libOpenGL|libgbm|libdrm|libX|libxcb|libwayland|libxkbcommon|libfontconfig|libvulkan|libudev|libsystemd|libdbus|libasound|libpulse|libselinux|libapparmor)'
+bundle_missing() {
+    local f dep
+    while IFS= read -r -d '' f; do
+        [[ "$(head -c4 "$f" | od -An -tx1 | tr -d ' ')" == 7f454c46 ]] || continue   # ELF files only
+        { "$APPDIR/usr/lib/ld-linux-x86-64.so.2" --library-path "$APPDIR/usr/lib" --list "$f" 2>/dev/null || true; } \
+            | awk '/=> \/(usr\/)?lib/ {print $3}' | while read -r dep; do
+                [[ "$(basename "$dep")" =~ $HOST_ONLY ]] && continue
+                [[ -e "$APPDIR/usr/lib/$(basename "$dep")" ]] || { echo "bundling $dep"; cp -L "$dep" "$APPDIR/usr/lib/"; }
+            done
+    done < <(find "$APPDIR/usr" -type f \( -name '*.so*' -o -path '*/usr/bin/*' \) -print0)
+}
+bundle_missing
+bundle_missing
+
+# Start through the bundled loader. The loader reads /etc/ld.so.cache for the
+# libraries that stay on the host (X11, Mesa, fontconfig).
+# The loader copy carries the app's name, so process lists show donut-taskmgr
+# instead of ld-linux-x86-64.so.2.
+install -Dm755 "$APPDIR/usr/lib/ld-linux-x86-64.so.2" "$APPDIR/usr/libexec/donut-taskmgr"
+rm -f "$APPDIR/AppRun" "$APPDIR/AppRun.wrapped"
+cat > "$APPDIR/AppRun" <<'APPRUN'
+#! /usr/bin/env bash
+set -e
+export APPDIR="$(dirname "$(readlink -f "$0")")"
+source "$APPDIR/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+export GCONV_PATH="$APPDIR/usr/lib/gconv"
+PIXBUF_LOADERS="$APPDIR/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+export GDK_PIXBUF_MODULEDIR="$PIXBUF_LOADERS"
+exec "$APPDIR/usr/libexec/donut-taskmgr" \
+    --library-path "$APPDIR/usr/lib:$PIXBUF_LOADERS" \
+    "$APPDIR/usr/bin/donut-taskmgr" "$@"
+APPRUN
+chmod +x "$APPDIR/AppRun"
+
 # AppImageHub needs a real .DirIcon, a desktop file and metainfo in the bundle.
 rm -f "$APPDIR/.DirIcon"
 cp "/src/icons/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/.DirIcon"
@@ -82,7 +139,10 @@ cp "/src/icons/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/.DirIcon"
 desktop-file-validate "$APPDIR/usr/share/applications/$APP_ID.desktop"
 appstreamcli validate --no-net "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
 
-"$TOOLS/linuxdeploy-x86_64.AppImage" --appdir "$APPDIR" --output appimage
+# Pack with linuxdeploy's own output plugin. Running linuxdeploy again would replace
+# the AppRun above with its generated one.
+rm -rf "$TOOLS/ld-root" && (cd "$TOOLS" && ./linuxdeploy-x86_64.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-root)
+"$TOOLS/ld-root/usr/bin/linuxdeploy-plugin-appimage" --appdir "$APPDIR"
 
 install -m755 "$LDAI_OUTPUT" /out/DonutTaskManager-x86_64.AppImage
 chown "$HOST_UID:$HOST_GID" /out/DonutTaskManager-x86_64.AppImage

@@ -62,7 +62,7 @@ pub fn is_installed() -> bool {
 /// Install binary, desktop file, and register global shortcut for the detected DE.
 /// Returns a user-facing status message.
 pub fn install() -> Result<String, String> {
-    let current_exe = std::env::current_exe()
+    let current_exe = crate::util::own_executable()
         .map_err(|e| format!("Cannot determine current executable: {}", e))?;
 
     // Copy binary via temp file + rename to avoid "text file busy" when

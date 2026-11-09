@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build DonutTaskManager-x86_64.AppImage in an Ubuntu 24.04 container, so the
-# bundle only needs glibc 2.39 or newer on the host.
+# Build DonutTaskManager-x86_64.AppImage in an Ubuntu 24.04 container. The bundle
+# carries its own glibc 2.39 and loader, so the host C library does not matter.
 #
 # Usage: packaging/appimage/build-appimage.sh
 # Output: dist/appimage/DonutTaskManager-x86_64.AppImage

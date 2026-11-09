@@ -103,7 +103,7 @@ fn launch_taskmgr() {
     let bin_path = if bin.exists() {
         bin
     } else {
-        std::env::current_exe().unwrap_or(bin)
+        crate::util::own_executable().unwrap_or(bin)
     };
 
     eprintln!("shortcut-daemon: launching {}", bin_path.display());
